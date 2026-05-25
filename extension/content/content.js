@@ -588,6 +588,30 @@
     };
   }
 
+  function renderGlyphPreview(doc, char, fontFamily) {
+    const canvas = doc.createElement("canvas");
+    const size = 72;
+    const scale = doc.defaultView?.devicePixelRatio || 1;
+    canvas.width = size * scale;
+    canvas.height = size * scale;
+
+    const context = canvas.getContext("2d");
+    context.scale(scale, scale);
+    context.clearRect(0, 0, size, size);
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, size, size);
+    context.strokeStyle = "#dde3ed";
+    context.lineWidth = 1;
+    context.strokeRect(0.5, 0.5, size - 1, size - 1);
+    context.fillStyle = "#111827";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = `48px "${fontFamily}"`;
+    context.fillText(char, size / 2, size / 2 + 4);
+
+    return canvas.toDataURL("image/png");
+  }
+
   function compareGlyphMasks(left, right) {
     if (!left || !right || left.ink === 0 || right.ink === 0) {
       return 0;
@@ -963,6 +987,7 @@
       entries.push({
         source: sourceChar,
         codePoint: codePointLabel(codePoint),
+        glyphPreview: renderGlyphPreview(documentInfo.document, sourceChar, fontScan.family),
         target: best.char,
         confidence: confidence[sourceChar],
         candidates: ranked.map((item) => ({

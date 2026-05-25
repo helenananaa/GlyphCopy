@@ -134,7 +134,13 @@ function renderRecognition(recognition) {
             <div class="recognition-row ${entry.manual ? "manual" : ""} ${
               !entry.manual && entry.confidence < LOW_CONFIDENCE_THRESHOLD ? "low-confidence" : ""
             }">
-              <strong>${escapeHtml(entry.source)}</strong>
+              <div class="glyph-preview" title="${escapeHtml(`${entry.source} ${entry.codePoint || ""}`)}">
+                ${
+                  entry.glyphPreview
+                    ? `<img src="${escapeHtml(entry.glyphPreview)}" alt="${escapeHtml(entry.codePoint || "glyph")}" />`
+                    : `<strong>${escapeHtml(entry.source)}</strong>`
+                }
+              </div>
               <input
                 class="manual-target"
                 maxlength="2"
