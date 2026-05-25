@@ -62,7 +62,8 @@ function renderFont(font) {
         <div>文档：<code>${escapeHtml(font.documentPath)} ${escapeHtml(font.documentTitle || "")}</code></div>
         <div>类型：${escapeHtml(font.sourceType)}，大小：${font.byteLength ?? "未知"} bytes</div>
         <div>Hash：<code>${escapeHtml(shortHash(font.fontHash))}</code></div>
-        <div>字体 cmap：${font.fontCodePoints?.length ?? 0} 个码点</div>
+        <div>字体 cmap：${font.fontCodePoints?.length ?? 0} 个码点，当前页出现：${font.observedCodePointCount ?? 0} 个</div>
+        <div>缓存：${font.cachedMappingCount ?? 0} 个，当前页已覆盖：${font.observedMappingCount ?? 0} 个，缺失：${font.missingObservedCodePointCount ?? 0} 个</div>
         <div>节点：${font.text.rootCount} 个根元素，${font.text.textNodeCount} 个文本节点</div>
       </div>
       ${
@@ -130,7 +131,11 @@ function renderRecognition(recognition) {
         .join("");
 
       return `
-        <div>识别：${escapeHtml(result.family)}，候选字 ${result.candidateCount} 个，已缓存到字体 hash。</div>
+        <div>识别：${escapeHtml(result.family)}，候选字 ${result.candidateCount} 个，canvas 复核 ${
+          result.canvasCandidateCount ?? result.candidateCount
+        } 个，本次新增 ${
+          result.recognizedCodePointCount ?? result.entries.length
+        } 个，缓存共 ${result.cachedMappingCount ?? Object.keys(result.mapping || {}).length} 个。</div>
         <div class="recognition-list">${rows}</div>
       `;
     })

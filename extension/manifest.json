@@ -15,5 +15,11 @@
       "js": ["content/content.js"],
       "run_at": "document_idle"
     }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["data/glyph-fingerprints-noto-sans-sc.json"],
+      "matches": ["*://*.chaoxing.com/*"]
+    }
   ]
 }

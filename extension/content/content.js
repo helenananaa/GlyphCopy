@@ -18,10 +18,14 @@
   const MAX_CHARS = 120;
   const MAX_RECOGNITION_CANDIDATES = 900;
   const RECOGNITION_GRID_SIZE = 28;
+  const FINGERPRINT_DICTIONARY_PATH = "data/glyph-fingerprints-noto-sans-sc.json";
+  const FINGERPRINT_TOP_CANDIDATES = 40;
+  const FINGERPRINT_CANVAS_ACCEPT_THRESHOLD = 0.72;
   const replacementOriginals = new WeakMap();
   const replacementObservers = [];
   let replacementObserverTimer = null;
   let replacementEnabled = false;
+  let fingerprintDictionaryPromise = null;
 
   const DOMAIN_RECOGNITION_CANDIDATES =
     "数字系统采用可以将减法运算转化为加法原码反码补码真值逻辑电路门与或非异或同或输入输出编码译码器信号二进制十进制八进制十六进制位权权值基数进位借位小数整数无符号有符号机器数表示范围溢出校验奇偶校验格雷码BCD码ASCII码触发器状态方程次态现态初态波形图所示端时钟脉冲上升沿下降沿边沿电平同步异步置位复位清零保持翻转计数器寄存器移位全加器半加器比较器选择器多路选择器数据选择器函数表达式卡诺图化简最小项最大项约束项无关项组合逻辑时序逻辑";
@@ -615,7 +619,198 @@
     return pixelScore * 0.58 + projectionScore * 0.25 + aspectScore * 0.1 + inkScore * 0.07;
   }
 
-  async function recognizeFont(scanResult, fontScan) {
+  function hexToBits(hex, bitCount) {
+    const bits = new Uint8Array(bitCount);
+    let bitIndex = 0;
+
+    for (const nibble of String(hex || "")) {
+      const value = Number.parseInt(nibble, 16);
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+
+      for (let shift = 3; shift >= 0 && bitIndex < bitCount; shift -= 1) {
+        bits[bitIndex] = (value >> shift) & 1;
+        bitIndex += 1;
+      }
+    }
+
+    return bits;
+  }
+
+  async function loadFingerprintDictionary() {
+    if (!fingerprintDictionaryPromise) {
+      fingerprintDictionaryPromise = (async () => {
+        const url = chrome.runtime.getURL(FINGERPRINT_DICTIONARY_PATH);
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Cannot load glyph fingerprint dictionary: ${response.status}`);
+        }
+
+        const payload = await response.json();
+        const gridSize = payload.gridSize || RECOGNITION_GRID_SIZE;
+        const bitCount = gridSize * gridSize;
+        const entries = (payload.entries || [])
+          .filter((entry) => entry.char && entry.grid)
+          .map((entry) => ({
+            char: entry.char,
+            codePoint: entry.codePoint,
+            aspect: Number(entry.aspect) || 0,
+            ink: Number(entry.ink) || 0,
+            bits: hexToBits(entry.grid, bitCount),
+            projectionX: entry.projectionX || [],
+            projectionY: entry.projectionY || [],
+          }));
+
+        return {
+          version: payload.version || 1,
+          font: payload.font || "",
+          gridSize,
+          entries,
+        };
+      })().catch((error) => {
+        console.warn("[GlyphCopy] fingerprint dictionary unavailable", error);
+        fingerprintDictionaryPromise = null;
+        return null;
+      });
+    }
+
+    return fingerprintDictionaryPromise;
+  }
+
+  function glyphMaskToFingerprint(glyphMask) {
+    if (!glyphMask || glyphMask.ink === 0) {
+      return null;
+    }
+
+    const bitCount = RECOGNITION_GRID_SIZE * RECOGNITION_GRID_SIZE;
+    const bits = new Uint8Array(bitCount);
+    const projectionX = new Array(RECOGNITION_GRID_SIZE).fill(0);
+    const projectionY = new Array(RECOGNITION_GRID_SIZE).fill(0);
+    let ink = 0;
+
+    for (let gy = 0; gy < RECOGNITION_GRID_SIZE; gy += 1) {
+      for (let gx = 0; gx < RECOGNITION_GRID_SIZE; gx += 1) {
+        const index = gy * RECOGNITION_GRID_SIZE + gx;
+        const bit = glyphMask.mask[index] > 0.18 ? 1 : 0;
+        bits[index] = bit;
+        projectionX[gx] += bit;
+        projectionY[gy] += bit;
+        ink += bit;
+      }
+    }
+
+    return {
+      bits,
+      projectionX,
+      projectionY,
+      aspect: glyphMask.aspect,
+      ink,
+    };
+  }
+
+  function compareGlyphFingerprints(left, right) {
+    if (!left || !right || left.ink === 0 || right.ink === 0) {
+      return 0;
+    }
+
+    let intersection = 0;
+    let union = 0;
+    for (let index = 0; index < left.bits.length; index += 1) {
+      const a = left.bits[index];
+      const b = right.bits[index];
+      if (a || b) {
+        union += 1;
+        if (a && b) {
+          intersection += 1;
+        }
+      }
+    }
+
+    let projectionDiff = 0;
+    let projectionUnion = 0;
+    for (let index = 0; index < RECOGNITION_GRID_SIZE; index += 1) {
+      projectionDiff += Math.abs((left.projectionX[index] || 0) - (right.projectionX[index] || 0));
+      projectionDiff += Math.abs((left.projectionY[index] || 0) - (right.projectionY[index] || 0));
+      projectionUnion += Math.max(left.projectionX[index] || 0, right.projectionX[index] || 0);
+      projectionUnion += Math.max(left.projectionY[index] || 0, right.projectionY[index] || 0);
+    }
+
+    const shapeScore = intersection / Math.max(1, union);
+    const projectionScore = 1 - projectionDiff / Math.max(1, projectionUnion);
+    const aspectScore = Math.max(0, 1 - Math.abs(left.aspect - right.aspect) / 1.5);
+    const inkScore = Math.max(0, 1 - Math.abs(left.ink - right.ink) / Math.max(left.ink, right.ink));
+
+    return shapeScore * 0.62 + projectionScore * 0.22 + aspectScore * 0.1 + inkScore * 0.06;
+  }
+
+  function rankDictionaryCandidates(sourceFingerprint, dictionary, excludedCodePoints) {
+    if (!sourceFingerprint || !dictionary || dictionary.gridSize !== RECOGNITION_GRID_SIZE) {
+      return [];
+    }
+
+    return dictionary.entries
+      .filter((entry) => !excludedCodePoints.has(entry.char.codePointAt(0)))
+      .map((entry) => ({
+        char: entry.char,
+        fingerprintScore: compareGlyphFingerprints(sourceFingerprint, entry),
+      }))
+      .sort((left, right) => right.fingerprintScore - left.fingerprintScore)
+      .slice(0, FINGERPRINT_TOP_CANDIDATES);
+  }
+
+  function codePointLabelToNumber(label) {
+    return Number.parseInt(String(label).replace(/^U\+/i, ""), 16);
+  }
+
+  function observedCodePointsFromFontScan(fontScan) {
+    return (fontScan.text?.suspiciousChars || []).map((item) => codePointLabelToNumber(item.codePoint));
+  }
+
+  function codePointLabel(codePoint) {
+    return `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+  }
+
+  function cachedMappingStats(cachedMapping, observedCodePoints) {
+    const mapping = cachedMapping?.mapping || {};
+    const observed = observedCodePoints || [];
+    const missingObservedCodePoints = observed.filter((codePoint) => !Object.prototype.hasOwnProperty.call(mapping, String.fromCodePoint(codePoint)));
+
+    return {
+      cachedMappingCount: Object.keys(mapping).length,
+      observedMappingCount: observed.length - missingObservedCodePoints.length,
+      missingObservedCodePoints,
+    };
+  }
+
+  function mergeRecognition(existingRecognition, patchRecognition) {
+    if (!existingRecognition) {
+      return patchRecognition;
+    }
+
+    const existingEntries = existingRecognition.entries || [];
+    const patchEntries = patchRecognition.entries || [];
+    const patchSources = new Set(patchEntries.map((entry) => entry.source));
+    const entries = existingEntries.filter((entry) => !patchSources.has(entry.source)).concat(patchEntries);
+
+    return {
+      ...existingRecognition,
+      ...patchRecognition,
+      mapping: {
+        ...(existingRecognition.mapping || {}),
+        ...(patchRecognition.mapping || {}),
+      },
+      confidence: {
+        ...(existingRecognition.confidence || {}),
+        ...(patchRecognition.confidence || {}),
+      },
+      entries,
+      previousUpdatedAt: existingRecognition.updatedAt,
+      updatedAt: Date.now(),
+    };
+  }
+
+  async function recognizeFont(scanResult, fontScan, options = {}) {
     const documents = collectAccessibleDocuments(window);
     const documentInfo = documents.find((item) => item.path === fontScan.documentPath);
     if (!documentInfo) {
@@ -626,16 +821,44 @@
       await documentInfo.document.fonts.ready;
     }
 
-    const codePoints = (fontScan.fontCodePoints || []).map((value) => Number.parseInt(value.slice(2), 16));
-    const codePointSet = new Set(codePoints);
-    const candidateChars = collectCandidateCharacters(documents, codePointSet);
-    const candidateMasks = [];
+    const allCodePoints = (fontScan.fontCodePoints || []).map(codePointLabelToNumber);
+    const observedCodePoints = observedCodePointsFromFontScan(fontScan);
+    const requestedCodePoints =
+      options.targetCodePoints && options.targetCodePoints.length > 0
+        ? options.targetCodePoints
+        : observedCodePoints.length > 0
+          ? observedCodePoints
+          : allCodePoints;
+    const existingRecognition = options.existingRecognition || null;
+    const existingMapping = existingRecognition?.mapping || {};
+    const codePoints = Array.from(new Set(requestedCodePoints)).filter(
+      (codePoint) => !Object.prototype.hasOwnProperty.call(existingMapping, String.fromCodePoint(codePoint)),
+    );
+    const codePointSet = new Set(allCodePoints);
 
-    for (const char of candidateChars) {
-      const mask = renderGlyphMask(documentInfo.document, char, fontScan.family, false);
-      if (mask) {
-        candidateMasks.push({ char, mask });
+    if (codePoints.length === 0 && existingRecognition) {
+      return {
+        ...existingRecognition,
+        requestedCodePointCount: requestedCodePoints.length,
+        recognizedCodePointCount: 0,
+        cacheCompleteForObserved: true,
+        updatedAt: existingRecognition.updatedAt,
+      };
+    }
+
+    const fallbackCandidateChars = collectCandidateCharacters(documents, codePointSet);
+    const fingerprintDictionary = await loadFingerprintDictionary();
+    const candidateMaskCache = new Map();
+    let canvasRenderCount = 0;
+
+    function getCandidateMask(char) {
+      if (!candidateMaskCache.has(char)) {
+        const mask = renderGlyphMask(documentInfo.document, char, fontScan.family, false);
+        candidateMaskCache.set(char, mask);
+        canvasRenderCount += 1;
       }
+
+      return candidateMaskCache.get(char);
     }
 
     const entries = [];
@@ -645,25 +868,48 @@
     for (const codePoint of codePoints) {
       const sourceChar = String.fromCodePoint(codePoint);
       const sourceMask = renderGlyphMask(documentInfo.document, sourceChar, fontScan.family, true);
-      const ranked = candidateMasks
-        .map((candidate) => ({
-          char: candidate.char,
-          score: compareGlyphMasks(sourceMask, candidate.mask),
+      const sourceFingerprint = glyphMaskToFingerprint(sourceMask);
+      const fingerprintRanked = rankDictionaryCandidates(sourceFingerprint, fingerprintDictionary, codePointSet);
+      const fingerprintScoreByChar = new Map(fingerprintRanked.map((item) => [item.char, item.fingerprintScore]));
+      const canvasCandidateChars = fingerprintRanked.length > 0
+        ? fingerprintRanked.map((item) => item.char)
+        : fallbackCandidateChars;
+      let ranked = canvasCandidateChars
+        .map((char) => ({
+          char,
+          score: compareGlyphMasks(sourceMask, getCandidateMask(char)),
+          fingerprintScore: fingerprintScoreByChar.get(char),
         }))
         .sort((left, right) => right.score - left.score)
         .slice(0, 5);
+
+      if (fingerprintRanked.length > 0 && (!ranked[0] || ranked[0].score < FINGERPRINT_CANVAS_ACCEPT_THRESHOLD)) {
+        const fallbackRanked = fallbackCandidateChars
+          .map((char) => ({
+            char,
+            score: compareGlyphMasks(sourceMask, getCandidateMask(char)),
+            fingerprintScore: fingerprintScoreByChar.get(char),
+          }))
+          .sort((left, right) => right.score - left.score)
+          .slice(0, 5);
+
+        if ((fallbackRanked[0]?.score || 0) > (ranked[0]?.score || 0)) {
+          ranked = fallbackRanked;
+        }
+      }
 
       const best = ranked[0] || { char: "", score: 0 };
       mapping[sourceChar] = best.char;
       confidence[sourceChar] = Number(best.score.toFixed(4));
       entries.push({
         source: sourceChar,
-        codePoint: `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`,
+        codePoint: codePointLabel(codePoint),
         target: best.char,
         confidence: confidence[sourceChar],
         candidates: ranked.map((item) => ({
           char: item.char,
           score: Number(item.score.toFixed(4)),
+          fingerprintScore: Number.isFinite(item.fingerprintScore) ? Number(item.fingerprintScore.toFixed(4)) : undefined,
         })),
       });
     }
@@ -672,8 +918,14 @@
       fontHash: fontScan.fontHash,
       family: fontScan.family,
       domain: location.hostname,
-      source: "auto-canvas-match",
-      candidateCount: candidateMasks.length,
+      source: fingerprintDictionary ? "fingerprint-rank-canvas-rerank" : "auto-canvas-match",
+      candidateCount: fingerprintDictionary?.entries.length || fallbackCandidateChars.length,
+      canvasCandidateCount: canvasRenderCount,
+      fingerprintTopCandidateCount: fingerprintDictionary ? FINGERPRINT_TOP_CANDIDATES : 0,
+      requestedCodePointCount: requestedCodePoints.length,
+      recognizedCodePointCount: entries.length,
+      allCodePointCount: allCodePoints.length,
+      observedCodePointCount: observedCodePoints.length,
       mapping,
       confidence,
       entries,
@@ -682,11 +934,17 @@
       documentUrl: fontScan.documentUrl,
     };
 
+    const mergedRecognition = mergeRecognition(existingRecognition, recognition);
+    const stats = cachedMappingStats(mergedRecognition, observedCodePoints);
+    mergedRecognition.cacheCompleteForObserved = stats.missingObservedCodePoints.length === 0;
+    mergedRecognition.missingObservedCodePoints = stats.missingObservedCodePoints.map(codePointLabel);
+    mergedRecognition.cachedMappingCount = Object.keys(mergedRecognition.mapping || {}).length;
+
     if (fontScan.cacheKey) {
-      await storageSet(fontScan.cacheKey, recognition);
+      await storageSet(fontScan.cacheKey, mergedRecognition);
     }
 
-    return recognition;
+    return mergedRecognition;
   }
 
   async function storageGet(key) {
@@ -754,6 +1012,13 @@
 
       const cacheKey = fontHash ? `${CACHE_PREFIX}${fontHash}` : null;
       const cachedMapping = cacheKey ? await storageGet(cacheKey) : null;
+      const textSummary = summarizeTextForFamily(
+        documents.find((documentInfo) => documentInfo.path === face.documentPath),
+        face.family,
+        new Set(fontCodePoints),
+      );
+      const observedCodePoints = textSummary.suspiciousChars.map((item) => codePointLabelToNumber(item.codePoint));
+      const cacheStats = cachedMappingStats(cachedMapping, observedCodePoints);
 
       fonts.push({
         family: face.family,
@@ -768,12 +1033,15 @@
         fontCodePoints: fontCodePoints.map((codePoint) => `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`),
         cacheKey,
         cacheHit: Boolean(cachedMapping),
+        cachedMappingCount: cacheStats.cachedMappingCount,
+        observedCodePoints: observedCodePoints.map(codePointLabel),
+        observedCodePointCount: observedCodePoints.length,
+        observedMappingCount: cacheStats.observedMappingCount,
+        missingObservedCodePoints: cacheStats.missingObservedCodePoints.map(codePointLabel),
+        missingObservedCodePointCount: cacheStats.missingObservedCodePoints.length,
+        cacheCompleteForObserved: cacheStats.missingObservedCodePoints.length === 0,
         error,
-        text: summarizeTextForFamily(
-          documents.find((documentInfo) => documentInfo.path === face.documentPath),
-          face.family,
-          new Set(fontCodePoints),
-        ),
+        text: textSummary,
       });
     }
 
@@ -800,7 +1068,14 @@
       }
 
       try {
-        results.push(await recognizeFont(scanResult, fontScan));
+        const cached = fontScan.cacheKey ? await storageGet(fontScan.cacheKey) : null;
+        const missingCodePoints = (fontScan.missingObservedCodePoints || []).map(codePointLabelToNumber);
+        results.push(
+          await recognizeFont(scanResult, fontScan, {
+            existingRecognition: cached,
+            targetCodePoints: missingCodePoints.length > 0 ? missingCodePoints : observedCodePointsFromFontScan(fontScan),
+          }),
+        );
       } catch (error) {
         results.push({
           fontHash: fontScan.fontHash,
@@ -882,11 +1157,18 @@
   }
 
   async function ensureRecognitionForFont(scanResult, fontScan) {
+    const missingCodePoints = (fontScan.missingObservedCodePoints || []).map(codePointLabelToNumber);
+
     if (fontScan.cacheKey) {
       const cached = await storageGet(fontScan.cacheKey);
-      if (cached && cached.mapping) {
+      if (cached && cached.mapping && missingCodePoints.length === 0) {
         return cached;
       }
+
+      return recognizeFont(scanResult, fontScan, {
+        existingRecognition: cached,
+        targetCodePoints: missingCodePoints.length > 0 ? missingCodePoints : observedCodePointsFromFontScan(fontScan),
+      });
     }
 
     return recognizeFont(scanResult, fontScan);
@@ -911,7 +1193,7 @@
 
         clearTimeout(replacementObserverTimer);
         replacementObserverTimer = setTimeout(() => {
-          applyMappings({ recognizeIfMissing: false, fromObserver: true }).catch(() => {});
+          applyMappings({ recognizeIfMissing: true, fromObserver: true }).catch(() => {});
         }, 300);
       });
 
@@ -936,7 +1218,8 @@
       }
 
       let recognition = fontScan.cacheKey ? await storageGet(fontScan.cacheKey) : null;
-      if ((!recognition || !recognition.mapping) && options.recognizeIfMissing !== false) {
+      const missingCodePoints = fontScan.missingObservedCodePoints || [];
+      if ((!recognition || !recognition.mapping || missingCodePoints.length > 0) && options.recognizeIfMissing !== false) {
         recognition = await ensureRecognitionForFont(scanResult, fontScan);
         recognitions.push(recognition);
       }
