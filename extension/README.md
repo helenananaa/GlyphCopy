@@ -23,10 +23,11 @@ Chrome MV3 prototype for extracting Chaoxing font-obfuscated text.
 - Popup `应用替换` applies cached or freshly recognized mappings only to text
   nodes under the matching suspicious font. `恢复原文` restores the original text
   in the current page session.
-- Popup `自动替换当前课程` is off by default. When enabled, GlyphCopy stores the
-  setting by Chaoxing host/course/class and automatically scans, recognizes, and
-  applies replacements on later page loads. The startup path retries a few times
-  so nested Chaoxing iframes have time to load.
+- Popup `自动替换超星页面` is off by default. When enabled, GlyphCopy stores one
+  `chaoxing.com` domain-wide setting and automatically scans, recognizes, and
+  applies replacements on later Chaoxing page loads. Pages without suspicious
+  fonts are scanned and left unchanged. The startup path retries a few times so
+  nested Chaoxing iframes have time to load.
 - The recognition panel supports manual corrections. Automatic mappings are
   stored in `mapping`, user corrections are stored in `manualMapping`, and page
   replacement uses `manualMapping` over `mapping`.

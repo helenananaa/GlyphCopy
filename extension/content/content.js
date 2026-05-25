@@ -1051,28 +1051,40 @@
 
   function autoApplyScopeFromUrl(urlText = location.href) {
     const url = new URL(urlText);
+    const domain = url.hostname.endsWith(".chaoxing.com") || url.hostname === "chaoxing.com" ? "chaoxing.com" : url.hostname;
+
+    return {
+      key: `${AUTO_APPLY_PREFIX}${encodeURIComponent(domain)}`,
+      label: domain === "chaoxing.com" ? "chaoxing.com 全站" : domain,
+      host: url.hostname,
+      domain,
+    };
+  }
+
+  function legacyCourseAutoApplyKeyFromUrl(urlText = location.href) {
+    const url = new URL(urlText);
     const params = url.searchParams;
     const courseId = params.get("courseId") || params.get("courseid") || "";
     const clazzId = params.get("clazzid") || params.get("classId") || "";
-    const chapterId = params.get("chapterId") || params.get("chapterid") || "";
     const parts = [url.hostname, courseId || "site", clazzId || "all"];
-    const label = courseId
-      ? `${url.hostname} / course ${courseId}${clazzId ? ` / class ${clazzId}` : ""}`
-      : `${url.hostname}${url.pathname}`;
-
-    return {
-      key: `${AUTO_APPLY_PREFIX}${parts.map((part) => encodeURIComponent(part)).join(":")}`,
-      label,
-      host: url.hostname,
-      courseId,
-      clazzId,
-      chapterId,
-    };
+    return `${AUTO_APPLY_PREFIX}${parts.map((part) => encodeURIComponent(part)).join(":")}`;
   }
 
   async function getAutoApplyState() {
     const scope = autoApplyScopeFromUrl();
-    const saved = (await storageGet(scope.key)) || {};
+    let saved = (await storageGet(scope.key)) || {};
+    if (!Object.prototype.hasOwnProperty.call(saved, "enabled")) {
+      const legacy = await storageGet(legacyCourseAutoApplyKeyFromUrl());
+      if (legacy && Object.prototype.hasOwnProperty.call(legacy, "enabled")) {
+        saved = legacy;
+        await storageSet(scope.key, {
+          ...legacy,
+          scope,
+          migratedFrom: "course",
+          updatedAt: Date.now(),
+        });
+      }
+    }
 
     return {
       enabled: Boolean(saved.enabled),
