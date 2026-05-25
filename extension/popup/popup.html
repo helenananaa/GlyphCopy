@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GlyphCopy</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>GlyphCopy</h1>
+          <p id="status">等待扫描</p>
+        </div>
+        <div class="actions">
+          <button id="scanButton" type="button">扫描</button>
+          <button id="recognizeButton" type="button">刷新识别</button>
+          <button id="applyButton" type="button">应用替换</button>
+          <button id="restoreButton" type="button">恢复原文</button>
+        </div>
+      </header>
+
+      <section id="summary" class="summary" hidden></section>
+      <section id="recognition" class="summary" hidden></section>
+      <section id="replacement" class="summary" hidden></section>
+      <section id="fonts" class="fonts"></section>
+
+      <footer class="footer">
+        <button id="copyButton" type="button" disabled>复制 JSON</button>
+      </footer>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

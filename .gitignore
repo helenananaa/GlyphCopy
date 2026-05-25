@@ -1,0 +1,8 @@
+# Captured browser sessions can include cookies, auth headers, and course data.
+*.har
+
+# Local debug browser profiles and copied runtime extension bundles.
+output/
+
+# Generated extraction outputs from local HAR samples.
+artifacts/

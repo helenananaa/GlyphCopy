@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "GlyphCopy",
+  "description": "Extract and inspect Chaoxing font-obfuscated text.",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["*://*.chaoxing.com/*"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "GlyphCopy"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.chaoxing.com/*"],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
