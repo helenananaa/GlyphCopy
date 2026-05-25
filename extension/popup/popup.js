@@ -2,6 +2,8 @@ const MESSAGE_SCAN = "GLYPHCOPY_SCAN";
 const MESSAGE_RECOGNIZE = "GLYPHCOPY_RECOGNIZE";
 const MESSAGE_APPLY = "GLYPHCOPY_APPLY";
 const MESSAGE_RESTORE = "GLYPHCOPY_RESTORE";
+const MESSAGE_GET_AUTO_APPLY = "GLYPHCOPY_GET_AUTO_APPLY";
+const MESSAGE_SET_AUTO_APPLY = "GLYPHCOPY_SET_AUTO_APPLY";
 const CACHE_PREFIX = "glyphcopy:mapping:";
 const LOW_CONFIDENCE_THRESHOLD = 0.78;
 
@@ -15,10 +17,13 @@ const recognizeButton = document.querySelector("#recognizeButton");
 const applyButton = document.querySelector("#applyButton");
 const restoreButton = document.querySelector("#restoreButton");
 const copyButton = document.querySelector("#copyButton");
+const autoApplyToggle = document.querySelector("#autoApplyToggle");
+const autoApplyMeta = document.querySelector("#autoApplyMeta");
 
 let latestScan = null;
 let latestRecognition = null;
 let latestReplacement = null;
+let latestAutoApply = null;
 
 function setStatus(text) {
   statusElement.textContent = text;
@@ -300,6 +305,71 @@ async function getActiveTab() {
   return tabs[0];
 }
 
+function renderAutoApply(autoApply) {
+  latestAutoApply = autoApply;
+  autoApplyToggle.checked = Boolean(autoApply?.enabled);
+  autoApplyToggle.disabled = false;
+
+  if (!autoApply) {
+    autoApplyMeta.textContent = "当前页面不可用";
+    return;
+  }
+
+  const suffix = autoApply.lastResult
+    ? `，上次替换 ${autoApply.lastResult.changedCharacterCount || 0} 字`
+    : "";
+  autoApplyMeta.textContent = `${autoApply.enabled ? "已开启" : "默认关闭"}：${autoApply.scope?.label || "当前页面"}${suffix}`;
+}
+
+async function refreshAutoApplyState() {
+  autoApplyToggle.disabled = true;
+
+  try {
+    const tab = await getActiveTab();
+    if (!tab || !tab.id) {
+      throw new Error("无法取得当前标签页");
+    }
+
+    const response = await chrome.tabs.sendMessage(tab.id, { type: MESSAGE_GET_AUTO_APPLY });
+    if (!response || !response.ok) {
+      throw new Error(response?.error || "content script 未返回自动替换状态");
+    }
+
+    renderAutoApply(response.autoApply);
+  } catch (_error) {
+    renderAutoApply(null);
+  }
+}
+
+async function setAutoApply(enabled) {
+  autoApplyToggle.disabled = true;
+  setStatus(enabled ? "正在开启自动替换..." : "正在关闭自动替换...");
+
+  try {
+    const tab = await getActiveTab();
+    if (!tab || !tab.id) {
+      throw new Error("无法取得当前标签页");
+    }
+
+    const response = await chrome.tabs.sendMessage(tab.id, { type: MESSAGE_SET_AUTO_APPLY, enabled });
+    if (!response || !response.ok) {
+      throw new Error(response?.error || "content script 未保存自动替换状态");
+    }
+
+    renderAutoApply(response.autoApply);
+    setStatus(enabled ? "自动替换已开启，正在应用当前页面..." : "自动替换已关闭。");
+    if (enabled) {
+      await applyCurrentTab();
+      await refreshAutoApplyState();
+    }
+  } catch (error) {
+    autoApplyToggle.checked = Boolean(latestAutoApply?.enabled);
+    setStatus(error instanceof Error ? error.message : String(error));
+  } finally {
+    autoApplyToggle.disabled = false;
+  }
+}
+
 async function scanCurrentTab() {
   scanButton.disabled = true;
   recognizeButton.disabled = true;
@@ -474,6 +544,9 @@ recognizeButton.addEventListener("click", recognizeCurrentTab);
 applyButton.addEventListener("click", applyCurrentTab);
 restoreButton.addEventListener("click", restoreCurrentTab);
 copyButton.addEventListener("click", copyLatestScan);
+autoApplyToggle.addEventListener("change", () => {
+  setAutoApply(autoApplyToggle.checked);
+});
 recognitionElement.addEventListener("click", (event) => {
   const button = event.target.closest(".save-manual-button");
   if (!button) {
@@ -485,4 +558,5 @@ recognitionElement.addEventListener("click", (event) => {
   });
 });
 
+refreshAutoApplyState();
 scanCurrentTab();

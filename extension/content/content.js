@@ -4,6 +4,8 @@
   const MESSAGE_RECOGNIZE = "GLYPHCOPY_RECOGNIZE";
   const MESSAGE_APPLY = "GLYPHCOPY_APPLY";
   const MESSAGE_RESTORE = "GLYPHCOPY_RESTORE";
+  const MESSAGE_GET_AUTO_APPLY = "GLYPHCOPY_GET_AUTO_APPLY";
+  const MESSAGE_SET_AUTO_APPLY = "GLYPHCOPY_SET_AUTO_APPLY";
   const PAGE_SCAN_REQUEST = "GLYPHCOPY_PAGE_SCAN_REQUEST";
   const PAGE_SCAN_RESULT = "GLYPHCOPY_PAGE_SCAN_RESULT";
   const PAGE_RECOGNIZE_REQUEST = "GLYPHCOPY_PAGE_RECOGNIZE_REQUEST";
@@ -13,6 +15,7 @@
   const PAGE_RESTORE_REQUEST = "GLYPHCOPY_PAGE_RESTORE_REQUEST";
   const PAGE_RESTORE_RESULT = "GLYPHCOPY_PAGE_RESTORE_RESULT";
   const CACHE_PREFIX = "glyphcopy:mapping:";
+  const AUTO_APPLY_PREFIX = "glyphcopy:autoApply:";
   const MAX_COMPUTED_STYLE_ELEMENTS = 5000;
   const MAX_SAMPLES = 8;
   const MAX_CHARS = 120;
@@ -21,6 +24,8 @@
   const FINGERPRINT_DICTIONARY_PATH = "data/glyph-fingerprints-noto-sans-sc.json";
   const FINGERPRINT_TOP_CANDIDATES = 40;
   const FINGERPRINT_CANVAS_ACCEPT_THRESHOLD = 0.72;
+  const AUTO_APPLY_RETRY_DELAY_MS = 2500;
+  const AUTO_APPLY_MAX_ATTEMPTS = 3;
   const replacementOriginals = new WeakMap();
   const replacementObservers = [];
   let replacementObserverTimer = null;
@@ -1044,6 +1049,82 @@
     });
   }
 
+  function autoApplyScopeFromUrl(urlText = location.href) {
+    const url = new URL(urlText);
+    const params = url.searchParams;
+    const courseId = params.get("courseId") || params.get("courseid") || "";
+    const clazzId = params.get("clazzid") || params.get("classId") || "";
+    const chapterId = params.get("chapterId") || params.get("chapterid") || "";
+    const parts = [url.hostname, courseId || "site", clazzId || "all"];
+    const label = courseId
+      ? `${url.hostname} / course ${courseId}${clazzId ? ` / class ${clazzId}` : ""}`
+      : `${url.hostname}${url.pathname}`;
+
+    return {
+      key: `${AUTO_APPLY_PREFIX}${parts.map((part) => encodeURIComponent(part)).join(":")}`,
+      label,
+      host: url.hostname,
+      courseId,
+      clazzId,
+      chapterId,
+    };
+  }
+
+  async function getAutoApplyState() {
+    const scope = autoApplyScopeFromUrl();
+    const saved = (await storageGet(scope.key)) || {};
+
+    return {
+      enabled: Boolean(saved.enabled),
+      scope,
+      updatedAt: saved.updatedAt || null,
+      lastAppliedAt: saved.lastAppliedAt || null,
+      lastResult: saved.lastResult || null,
+    };
+  }
+
+  async function setAutoApplyState(enabled) {
+    const current = await getAutoApplyState();
+    const next = {
+      ...current,
+      enabled: Boolean(enabled),
+      updatedAt: Date.now(),
+    };
+
+    await storageSet(current.scope.key, next);
+    return next;
+  }
+
+  async function saveAutoApplyResult(appliedResult) {
+    const current = await getAutoApplyState();
+    if (!current.enabled) {
+      return current;
+    }
+
+    const changedNodeCount = (appliedResult.results || []).reduce((sum, result) => sum + (result.changedNodeCount || 0), 0);
+    const changedCharacterCount = (appliedResult.results || []).reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
+    const lowConfidenceCount = (appliedResult.recognitions || []).reduce(
+      (sum, recognition) => sum + (recognition.entries || []).filter((entry) => !entry.manual && entry.confidence < 0.78).length,
+      0,
+    );
+    const lastResult =
+      changedCharacterCount === 0 && (current.lastResult?.changedCharacterCount || 0) > 0
+        ? current.lastResult
+        : {
+            changedNodeCount,
+            changedCharacterCount,
+            lowConfidenceCount,
+          };
+    const next = {
+      ...current,
+      lastAppliedAt: Date.now(),
+      lastResult,
+    };
+
+    await storageSet(current.scope.key, next);
+    return next;
+  }
+
   function collectAccessibleDocuments(rootWindow = window) {
     const documents = [];
 
@@ -1341,6 +1422,7 @@
     return {
       appliedAt: new Date().toISOString(),
       fromObserver: Boolean(options.fromObserver),
+      automatic: Boolean(options.automatic),
       url: location.href,
       title: document.title,
       results,
@@ -1386,8 +1468,44 @@
     };
   }
 
+  async function runAutoApplyIfEnabled(attempt = 1) {
+    if (window.top !== window) {
+      return null;
+    }
+
+    const state = await getAutoApplyState();
+    if (!state.enabled) {
+      return null;
+    }
+
+    const applied = await applyMappings({ recognizeIfMissing: true, automatic: true });
+    await saveAutoApplyResult(applied);
+    const changedCharacterCount = (applied.results || []).reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
+
+    if (changedCharacterCount === 0 && attempt < AUTO_APPLY_MAX_ATTEMPTS) {
+      setTimeout(() => {
+        runAutoApplyIfEnabled(attempt + 1).catch((error) => {
+          console.warn("[GlyphCopy] auto apply retry failed", error);
+        });
+      }, AUTO_APPLY_RETRY_DELAY_MS);
+    }
+
+    return applied;
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || ![MESSAGE_SCAN, MESSAGE_GET_LAST_SCAN, MESSAGE_RECOGNIZE, MESSAGE_APPLY, MESSAGE_RESTORE].includes(message.type)) {
+    if (
+      !message ||
+      ![
+        MESSAGE_SCAN,
+        MESSAGE_GET_LAST_SCAN,
+        MESSAGE_RECOGNIZE,
+        MESSAGE_APPLY,
+        MESSAGE_RESTORE,
+        MESSAGE_GET_AUTO_APPLY,
+        MESSAGE_SET_AUTO_APPLY,
+      ].includes(message.type)
+    ) {
       return false;
     }
 
@@ -1397,7 +1515,11 @@
     }
 
     let task;
-    if (message.type === MESSAGE_RECOGNIZE) {
+    if (message.type === MESSAGE_GET_AUTO_APPLY) {
+      task = getAutoApplyState();
+    } else if (message.type === MESSAGE_SET_AUTO_APPLY) {
+      task = setAutoApplyState(Boolean(message.enabled));
+    } else if (message.type === MESSAGE_RECOGNIZE) {
       task = recognize();
     } else if (message.type === MESSAGE_APPLY) {
       task = applyMappings({ recognizeIfMissing: true });
@@ -1410,7 +1532,9 @@
     task
       .then((result) =>
         sendResponse(
-          message.type === MESSAGE_RECOGNIZE
+          message.type === MESSAGE_GET_AUTO_APPLY || message.type === MESSAGE_SET_AUTO_APPLY
+            ? { ok: true, autoApply: result }
+            : message.type === MESSAGE_RECOGNIZE
             ? { ok: true, recognition: result }
             : message.type === MESSAGE_APPLY
               ? { ok: true, applied: result }
@@ -1535,4 +1659,10 @@
         );
       });
   });
+
+  setTimeout(() => {
+    runAutoApplyIfEnabled(1).catch((error) => {
+      console.warn("[GlyphCopy] auto apply failed", error);
+    });
+  }, AUTO_APPLY_RETRY_DELAY_MS);
 })();
