@@ -2,6 +2,8 @@ const MESSAGE_SCAN = "GLYPHCOPY_SCAN";
 const MESSAGE_RECOGNIZE = "GLYPHCOPY_RECOGNIZE";
 const MESSAGE_APPLY = "GLYPHCOPY_APPLY";
 const MESSAGE_RESTORE = "GLYPHCOPY_RESTORE";
+const CACHE_PREFIX = "glyphcopy:mapping:";
+const LOW_CONFIDENCE_THRESHOLD = 0.78;
 
 const statusElement = document.querySelector("#status");
 const summaryElement = document.querySelector("#summary");
@@ -33,6 +35,18 @@ function escapeHtml(value) {
 
 function shortHash(hash) {
   return hash ? `${hash.slice(0, 12)}...${hash.slice(-8)}` : "未取得";
+}
+
+async function storageGet(key) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(key, (result) => resolve(result[key]));
+  });
+}
+
+async function storageSet(key, value) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [key]: value }, resolve);
+  });
 }
 
 function renderSummary(scan) {
@@ -112,18 +126,37 @@ function renderRecognition(recognition) {
         return `<div>识别失败：${escapeHtml(result.family)}，${escapeHtml(result.error)}</div>`;
       }
 
+      const manualCount = result.manualMappingCount ?? Object.keys(result.manualMapping || {}).length;
+      const lowConfidenceCount = result.entries.filter((entry) => !entry.manual && entry.confidence < LOW_CONFIDENCE_THRESHOLD).length;
       const rows = result.entries
-        .slice(0, 18)
         .map(
           (entry) => `
-            <div class="recognition-row">
+            <div class="recognition-row ${entry.manual ? "manual" : ""} ${
+              !entry.manual && entry.confidence < LOW_CONFIDENCE_THRESHOLD ? "low-confidence" : ""
+            }">
               <strong>${escapeHtml(entry.source)}</strong>
-              <span>${escapeHtml(entry.target || "未识别")} ${escapeHtml(
-                entry.candidates
-                  .slice(1, 4)
-                  .map((item) => item.char)
+              <input
+                class="manual-target"
+                maxlength="2"
+                value="${escapeHtml(entry.target || "")}"
+                data-font-hash="${escapeHtml(result.fontHash)}"
+                data-source="${escapeHtml(entry.source)}"
+                aria-label="修正 ${escapeHtml(entry.source)} 的映射"
+              />
+              <span title="${escapeHtml(
+                (entry.candidates || [])
+                  .map((item) => `${item.char} ${Math.round(item.score * 100)}%`)
                   .join(" / "),
-              )}</span>
+              )}">
+                ${entry.manual
+                  ? `人工，自动：${escapeHtml(entry.autoTarget || "无")}`
+                  : escapeHtml(
+                      (entry.candidates || [])
+                        .slice(1, 4)
+                        .map((item) => item.char)
+                        .join(" / "),
+                    )}
+              </span>
               <em>${Math.round(entry.confidence * 100)}%</em>
             </div>
           `,
@@ -136,6 +169,10 @@ function renderRecognition(recognition) {
         } 个，本次新增 ${
           result.recognizedCodePointCount ?? result.entries.length
         } 个，缓存共 ${result.cachedMappingCount ?? Object.keys(result.mapping || {}).length} 个。</div>
+        <div class="recognition-tools">
+          <span>人工修正 ${manualCount} 个，低置信度 ${lowConfidenceCount} 个</span>
+          <button class="save-manual-button" type="button" data-font-hash="${escapeHtml(result.fontHash)}">保存修正</button>
+        </div>
         <div class="recognition-list">${rows}</div>
       `;
     })
@@ -157,6 +194,99 @@ function renderReplacement(applied) {
 function renderRestore(restored) {
   replacementElement.hidden = false;
   replacementElement.innerHTML = `<div>已恢复：${restored.restoredNodeCount} 个文本节点。</div>`;
+}
+
+function cacheKeyForFontHash(fontHash) {
+  return `${CACHE_PREFIX}${fontHash}`;
+}
+
+function applyManualOverridesToResult(result, manualMapping) {
+  const effectiveMapping = {
+    ...(result.mapping || {}),
+    ...(manualMapping || {}),
+  };
+  const manualSources = new Set(Object.keys(manualMapping || {}));
+  const entries = (result.entries || []).map((entry) => {
+    if (!Object.prototype.hasOwnProperty.call(manualMapping || {}, entry.source)) {
+      return {
+        ...entry,
+        manual: false,
+        target: result.mapping?.[entry.source] || entry.target,
+      };
+    }
+
+    return {
+      ...entry,
+      autoTarget: entry.autoTarget || result.mapping?.[entry.source] || entry.target,
+      target: manualMapping[entry.source],
+      manual: true,
+    };
+  });
+
+  return {
+    ...result,
+    manualMapping,
+    manualMappingCount: manualSources.size,
+    effectiveMapping,
+    effectiveMappingCount: Object.keys(effectiveMapping).length,
+    cachedMappingCount: Object.keys(effectiveMapping).length,
+    entries,
+  };
+}
+
+async function saveManualCorrections(fontHash) {
+  if (!fontHash || !latestRecognition) {
+    return;
+  }
+
+  const result = latestRecognition.results.find((item) => item.fontHash === fontHash);
+  if (!result) {
+    return;
+  }
+
+  const cacheKey = cacheKeyForFontHash(fontHash);
+  const cached = (await storageGet(cacheKey)) || result;
+  const manualMapping = {
+    ...(cached.manualMapping || result.manualMapping || {}),
+  };
+  const inputs = Array.from(recognitionElement.querySelectorAll(`.manual-target[data-font-hash="${CSS.escape(fontHash)}"]`));
+
+  for (const input of inputs) {
+    const source = input.dataset.source;
+    const value = Array.from(input.value.trim())[0] || "";
+    if (!source) {
+      continue;
+    }
+
+    input.value = value;
+    const autoTarget = cached.mapping?.[source] || result.mapping?.[source] || "";
+    if (value && value !== autoTarget) {
+      manualMapping[source] = value;
+    } else {
+      delete manualMapping[source];
+    }
+  }
+
+  const updated = applyManualOverridesToResult(
+    {
+      ...cached,
+      ...result,
+      mapping: {
+        ...(cached.mapping || {}),
+        ...(result.mapping || {}),
+      },
+    },
+    manualMapping,
+  );
+  updated.manualUpdatedAt = Date.now();
+  await storageSet(cacheKey, updated);
+
+  latestRecognition = {
+    ...latestRecognition,
+    results: latestRecognition.results.map((item) => (item.fontHash === fontHash ? updated : item)),
+  };
+  renderRecognition(latestRecognition);
+  setStatus(`已保存 ${updated.manualMappingCount || 0} 个人工修正。`);
 }
 
 async function getActiveTab() {
@@ -338,5 +468,15 @@ recognizeButton.addEventListener("click", recognizeCurrentTab);
 applyButton.addEventListener("click", applyCurrentTab);
 restoreButton.addEventListener("click", restoreCurrentTab);
 copyButton.addEventListener("click", copyLatestScan);
+recognitionElement.addEventListener("click", (event) => {
+  const button = event.target.closest(".save-manual-button");
+  if (!button) {
+    return;
+  }
+
+  saveManualCorrections(button.dataset.fontHash).catch((error) => {
+    setStatus(error instanceof Error ? error.message : String(error));
+  });
+});
 
 scanCurrentTab();

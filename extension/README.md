@@ -23,6 +23,11 @@ Chrome MV3 prototype for extracting Chaoxing font-obfuscated text.
 - Popup `应用替换` applies cached or freshly recognized mappings only to text
   nodes under the matching suspicious font. `恢复原文` restores the original text
   in the current page session.
+- The recognition panel supports manual corrections. Automatic mappings are
+  stored in `mapping`, user corrections are stored in `manualMapping`, and page
+  replacement uses `manualMapping` over `mapping`.
+- Low-confidence matches are highlighted only inside the popup inspection panel;
+  page content is not visually marked.
 
 ## Local install
 
@@ -36,9 +41,9 @@ Chrome MV3 prototype for extracting Chaoxing font-obfuscated text.
 
 Improve replacement:
 
-1. Add a manual correction UI for low-confidence mappings.
-2. Persist user-confirmed mappings separately from auto mappings.
-3. Add import/export for cached mappings.
+1. Add import/export for cached mappings.
+2. Add optional page-side low-confidence highlighting, default off.
+3. Add a larger fallback dictionary for non-course domains.
 
 ## Fingerprint dictionary
 

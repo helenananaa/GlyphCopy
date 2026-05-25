@@ -159,9 +159,24 @@ p {
   margin-top: 8px;
 }
 
+.recognition-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: #667085;
+}
+
+.recognition-tools button {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .recognition-row {
   display: grid;
-  grid-template-columns: 28px 1fr 42px;
+  grid-template-columns: 28px 44px 1fr 42px;
   gap: 8px;
   align-items: center;
   padding: 5px 6px;
@@ -170,10 +185,37 @@ p {
   background: #fbfcfe;
 }
 
+.recognition-row.low-confidence {
+  border-color: #f2c94c;
+  background: #fffaf0;
+}
+
+.recognition-row.manual {
+  border-color: #98d8b8;
+  background: #f4fbf7;
+}
+
 .recognition-row strong {
   font-size: 18px;
   line-height: 22px;
   text-align: center;
+}
+
+.manual-target {
+  width: 44px;
+  height: 28px;
+  border: 1px solid #cfd6e4;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+  font-size: 16px;
+  text-align: center;
+}
+
+.manual-target:focus {
+  border-color: #3b82f6;
+  outline: 2px solid rgba(59, 130, 246, 0.18);
 }
 
 .recognition-row span {

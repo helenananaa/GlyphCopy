@@ -771,8 +771,63 @@
     return `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
   }
 
+  function effectiveMappingForRecognition(recognition) {
+    return {
+      ...(recognition?.mapping || {}),
+      ...(recognition?.manualMapping || {}),
+    };
+  }
+
+  function applyManualOverridesToRecognition(recognition) {
+    if (!recognition) {
+      return recognition;
+    }
+
+    const manualMapping = recognition.manualMapping || {};
+    const effectiveMapping = effectiveMappingForRecognition(recognition);
+    const manualSources = new Set(Object.keys(manualMapping));
+    const entries = (recognition.entries || []).map((entry) => {
+      if (!Object.prototype.hasOwnProperty.call(manualMapping, entry.source)) {
+        return entry;
+      }
+
+      return {
+        ...entry,
+        autoTarget: entry.autoTarget || entry.target,
+        target: manualMapping[entry.source],
+        manual: true,
+      };
+    });
+    const entrySources = new Set(entries.map((entry) => entry.source));
+
+    for (const source of manualSources) {
+      if (entrySources.has(source)) {
+        continue;
+      }
+
+      entries.push({
+        source,
+        codePoint: codePointLabel(source.codePointAt(0)),
+        target: manualMapping[source],
+        autoTarget: recognition.mapping?.[source] || "",
+        confidence: recognition.confidence?.[source] || 1,
+        manual: true,
+        candidates: [],
+      });
+    }
+
+    return {
+      ...recognition,
+      manualMapping,
+      effectiveMapping,
+      effectiveMappingCount: Object.keys(effectiveMapping).length,
+      manualMappingCount: manualSources.size,
+      entries,
+    };
+  }
+
   function cachedMappingStats(cachedMapping, observedCodePoints) {
-    const mapping = cachedMapping?.mapping || {};
+    const mapping = effectiveMappingForRecognition(cachedMapping);
     const observed = observedCodePoints || [];
     const missingObservedCodePoints = observed.filter((codePoint) => !Object.prototype.hasOwnProperty.call(mapping, String.fromCodePoint(codePoint)));
 
@@ -799,6 +854,10 @@
       mapping: {
         ...(existingRecognition.mapping || {}),
         ...(patchRecognition.mapping || {}),
+      },
+      manualMapping: {
+        ...(existingRecognition.manualMapping || {}),
+        ...(patchRecognition.manualMapping || {}),
       },
       confidence: {
         ...(existingRecognition.confidence || {}),
@@ -830,20 +889,20 @@
           ? observedCodePoints
           : allCodePoints;
     const existingRecognition = options.existingRecognition || null;
-    const existingMapping = existingRecognition?.mapping || {};
+    const existingMapping = effectiveMappingForRecognition(existingRecognition);
     const codePoints = Array.from(new Set(requestedCodePoints)).filter(
       (codePoint) => !Object.prototype.hasOwnProperty.call(existingMapping, String.fromCodePoint(codePoint)),
     );
     const codePointSet = new Set(allCodePoints);
 
     if (codePoints.length === 0 && existingRecognition) {
-      return {
+      return applyManualOverridesToRecognition({
         ...existingRecognition,
         requestedCodePointCount: requestedCodePoints.length,
         recognizedCodePointCount: 0,
         cacheCompleteForObserved: true,
         updatedAt: existingRecognition.updatedAt,
-      };
+      });
     }
 
     const fallbackCandidateChars = collectCandidateCharacters(documents, codePointSet);
@@ -938,13 +997,14 @@
     const stats = cachedMappingStats(mergedRecognition, observedCodePoints);
     mergedRecognition.cacheCompleteForObserved = stats.missingObservedCodePoints.length === 0;
     mergedRecognition.missingObservedCodePoints = stats.missingObservedCodePoints.map(codePointLabel);
-    mergedRecognition.cachedMappingCount = Object.keys(mergedRecognition.mapping || {}).length;
+    mergedRecognition.cachedMappingCount = stats.cachedMappingCount;
+    const recognitionForReturn = applyManualOverridesToRecognition(mergedRecognition);
 
     if (fontScan.cacheKey) {
-      await storageSet(fontScan.cacheKey, mergedRecognition);
+      await storageSet(fontScan.cacheKey, recognitionForReturn);
     }
 
-    return mergedRecognition;
+    return recognitionForReturn;
   }
 
   async function storageGet(key) {
@@ -1161,8 +1221,8 @@
 
     if (fontScan.cacheKey) {
       const cached = await storageGet(fontScan.cacheKey);
-      if (cached && cached.mapping && missingCodePoints.length === 0) {
-        return cached;
+      if (cached && Object.keys(effectiveMappingForRecognition(cached)).length > 0 && missingCodePoints.length === 0) {
+        return applyManualOverridesToRecognition(cached);
       }
 
       return recognizeFont(scanResult, fontScan, {
@@ -1219,12 +1279,14 @@
 
       let recognition = fontScan.cacheKey ? await storageGet(fontScan.cacheKey) : null;
       const missingCodePoints = fontScan.missingObservedCodePoints || [];
-      if ((!recognition || !recognition.mapping || missingCodePoints.length > 0) && options.recognizeIfMissing !== false) {
+      const effectiveMapping = effectiveMappingForRecognition(recognition);
+      if ((!recognition || Object.keys(effectiveMapping).length === 0 || missingCodePoints.length > 0) && options.recognizeIfMissing !== false) {
         recognition = await ensureRecognitionForFont(scanResult, fontScan);
         recognitions.push(recognition);
       }
 
-      if (!recognition || !recognition.mapping) {
+      const mapping = effectiveMappingForRecognition(recognition);
+      if (!recognition || Object.keys(mapping).length === 0) {
         results.push({
           family: fontScan.family,
           fontHash: fontScan.fontHash,
@@ -1245,7 +1307,7 @@
         continue;
       }
 
-      results.push(applyMappingToFont(documentInfo, fontScan, recognition.mapping));
+      results.push(applyMappingToFont(documentInfo, fontScan, mapping));
     }
 
     replacementEnabled = true;
