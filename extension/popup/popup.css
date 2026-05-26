@@ -85,6 +85,30 @@ button:disabled {
   line-height: 16px;
 }
 
+.auto-diagnostics {
+  display: grid;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid #eef1f5;
+  color: #344054;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.auto-diagnostic-row {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  gap: 6px;
+}
+
+.auto-diagnostic-row span:first-child {
+  color: #667085;
+}
+
+.auto-diagnostic-row.warn {
+  color: #b42318;
+}
+
 h1 {
   margin: 0;
   font-size: 18px;

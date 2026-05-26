@@ -19,6 +19,7 @@ const restoreButton = document.querySelector("#restoreButton");
 const copyButton = document.querySelector("#copyButton");
 const autoApplyToggle = document.querySelector("#autoApplyToggle");
 const autoApplyMeta = document.querySelector("#autoApplyMeta");
+const autoApplyDiagnosticsElement = document.querySelector("#autoApplyDiagnostics");
 
 let latestScan = null;
 let latestRecognition = null;
@@ -305,6 +306,113 @@ async function getActiveTab() {
   return tabs[0];
 }
 
+function formatTime(value) {
+  if (!value) {
+    return "无";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "无";
+  }
+
+  return date.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function formatDuration(value) {
+  if (value === null || value === undefined) {
+    return "未完成";
+  }
+
+  if (value < 1000) {
+    return `${value}ms`;
+  }
+
+  return `${(value / 1000).toFixed(1)}s`;
+}
+
+function renderDiagnosticRow(label, value, className = "") {
+  return `<div class="auto-diagnostic-row ${className}"><span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span></div>`;
+}
+
+function renderAutoApplyDiagnostics(autoApply) {
+  if (!autoApplyDiagnosticsElement) {
+    return;
+  }
+
+  if (!autoApply) {
+    autoApplyDiagnosticsElement.hidden = true;
+    autoApplyDiagnosticsElement.innerHTML = "";
+    return;
+  }
+
+  const diagnostics = autoApply.diagnostics || {};
+  const result = diagnostics.lastResult;
+  const statusLabels = {
+    idle: "待机",
+    scheduled: "已排队",
+    running: "运行中",
+    busy: "忙碌，已重排",
+    success: "成功",
+    error: "出错",
+    disabled: "已关闭",
+  };
+  const reasonLabels = {
+    startup: "页面启动",
+    enabled: "手动开启",
+    storage: "开关同步",
+    mutation: "页面变化",
+    pageshow: "页面显示",
+    load: "页面加载",
+    readystatechange: "加载状态",
+    visible: "回到前台",
+    retry: "空结果重试",
+    "error-retry": "错误重试",
+    "error-idle": "错误后轮询",
+    idle: "周期轮询",
+    busy: "运行中重排",
+    timer: "定时器",
+  };
+  const status = statusLabels[diagnostics.status] || diagnostics.status || "未运行";
+  const trigger = reasonLabels[diagnostics.lastTrigger] || diagnostics.lastTrigger || "无";
+  const scheduled = reasonLabels[diagnostics.lastScheduleReason] || diagnostics.lastScheduleReason || "无";
+  const runText = diagnostics.lastStartedAt
+    ? `${formatTime(diagnostics.lastStartedAt)}，${formatDuration(diagnostics.lastDurationMs)}`
+    : "尚未运行";
+  const nextText = autoApply.enabled && diagnostics.nextRunAt ? formatTime(diagnostics.nextRunAt) : "无";
+  const rows = [
+    renderDiagnosticRow("状态", `${status}，运行 ${diagnostics.runCount || 0} 次，成功 ${diagnostics.successCount || 0} 次`),
+    renderDiagnosticRow("触发", `${trigger}，尝试 ${diagnostics.lastAttempt || 0}`),
+    renderDiagnosticRow("最近", runText),
+    renderDiagnosticRow("下次", `${nextText}，${scheduled}`),
+    renderDiagnosticRow("监听", `${diagnostics.observerDocumentCount || 0} 个文档`),
+  ];
+
+  if (result) {
+    rows.push(
+      renderDiagnosticRow(
+        "扫描",
+        `${result.documentCount || 0} 文档，${result.candidateCount || 0} 可疑字体，${result.recognitionCount || 0} 次识别`,
+      ),
+    );
+    rows.push(
+      renderDiagnosticRow(
+        "替换",
+        `${result.changedCharacterCount || 0} 字，${result.changedNodeCount || 0} 节点，跳过 ${result.skippedCount || 0}，低置信 ${result.lowConfidenceCount || 0}`,
+      ),
+    );
+  } else {
+    rows.push(renderDiagnosticRow("结果", "尚无自动运行结果"));
+  }
+
+  if (diagnostics.lastError) {
+    rows.push(renderDiagnosticRow("错误", diagnostics.lastError, "warn"));
+  }
+
+  autoApplyDiagnosticsElement.hidden = false;
+  autoApplyDiagnosticsElement.innerHTML = rows.join("");
+}
+
 function renderAutoApply(autoApply) {
   latestAutoApply = autoApply;
   autoApplyToggle.checked = Boolean(autoApply?.enabled);
@@ -312,13 +420,13 @@ function renderAutoApply(autoApply) {
 
   if (!autoApply) {
     autoApplyMeta.textContent = "当前页面不可用";
+    renderAutoApplyDiagnostics(null);
     return;
   }
 
-  const suffix = autoApply.lastResult
-    ? `，上次替换 ${autoApply.lastResult.changedCharacterCount || 0} 字`
-    : "";
+  const suffix = autoApply.lastResult ? `，上次替换 ${autoApply.lastResult.changedCharacterCount || 0} 字` : "";
   autoApplyMeta.textContent = `${autoApply.enabled ? "已开启" : "默认关闭"}：${autoApply.scope?.label || "当前页面"}${suffix}`;
+  renderAutoApplyDiagnostics(autoApply);
 }
 
 async function refreshAutoApplyState() {

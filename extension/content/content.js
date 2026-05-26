@@ -32,13 +32,30 @@
   const replacementObservers = [];
   let replacementObserverDocuments = new WeakSet();
   const autoApplyObservers = [];
-  const autoApplyObserverDocuments = new WeakSet();
+  let autoApplyObserverDocuments = new WeakSet();
   let replacementObserverTimer = null;
   let replacementEnabled = false;
   let fingerprintDictionaryPromise = null;
   let autoApplyTimer = null;
   let autoApplyObserverTimer = null;
   let autoApplyRunning = false;
+  const autoApplyDiagnostics = {
+    status: "idle",
+    runCount: 0,
+    successCount: 0,
+    failureCount: 0,
+    lastScheduleReason: null,
+    lastScheduledAt: null,
+    nextRunAt: null,
+    lastStartedAt: null,
+    lastFinishedAt: null,
+    lastDurationMs: null,
+    lastAttempt: null,
+    lastTrigger: null,
+    lastError: null,
+    lastResult: null,
+    observerDocumentCount: 0,
+  };
 
   const DOMAIN_RECOGNITION_CANDIDATES =
     "数字系统采用可以将减法运算转化为加法原码反码补码真值逻辑电路门与或非异或同或输入输出编码译码器信号二进制十进制八进制十六进制位权权值基数进位借位小数整数无符号有符号机器数表示范围溢出校验奇偶校验格雷码BCD码ASCII码触发器状态方程次态现态初态波形图所示端时钟脉冲上升沿下降沿边沿电平同步异步置位复位清零保持翻转计数器寄存器移位全加器半加器比较器选择器多路选择器数据选择器函数表达式卡诺图化简最小项最大项约束项无关项组合逻辑时序逻辑";
@@ -1046,14 +1063,30 @@
   }
 
   async function storageGet(key) {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(key, (result) => resolve(result[key]));
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(key, (result) => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message));
+          return;
+        }
+
+        resolve(result[key]);
+      });
     });
   }
 
   async function storageSet(key, value) {
-    return new Promise((resolve) => {
-      chrome.storage.local.set({ [key]: value }, resolve);
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: value }, () => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message));
+          return;
+        }
+
+        resolve();
+      });
     });
   }
 
@@ -1100,6 +1133,10 @@
       updatedAt: saved.updatedAt || null,
       lastAppliedAt: saved.lastAppliedAt || null,
       lastResult: saved.lastResult || null,
+      diagnostics: {
+        ...autoApplyDiagnostics,
+        observerDocumentCount: autoApplyObservers.length,
+      },
     };
   }
 
@@ -1112,6 +1149,12 @@
     };
 
     await storageSet(current.scope.key, next);
+    if (next.enabled) {
+      startAutoApply("enabled", 0);
+    } else {
+      stopAutoApply();
+    }
+
     return next;
   }
 
@@ -1508,69 +1551,207 @@
       observer.observe(documentInfo.document.body, {
         attributes: true,
         childList: true,
+        characterData: true,
         subtree: true,
       });
       autoApplyObservers.push(observer);
       autoApplyObserverDocuments.add(documentInfo.document);
     }
+    autoApplyDiagnostics.observerDocumentCount = autoApplyObservers.length;
   }
 
-  function scheduleAutoApply(_reason = "timer", delay = AUTO_APPLY_IDLE_INTERVAL_MS) {
+  function stopAutoApply() {
+    clearTimeout(autoApplyTimer);
+    clearTimeout(autoApplyObserverTimer);
+    for (const observer of autoApplyObservers.splice(0)) {
+      observer.disconnect();
+    }
+    autoApplyObserverDocuments = new WeakSet();
+    Object.assign(autoApplyDiagnostics, {
+      status: "disabled",
+      nextRunAt: null,
+      observerDocumentCount: 0,
+    });
+  }
+
+  function summarizeAutoApplyResult(applied) {
+    const results = applied.results || [];
+    const recognitions = applied.recognitions || [];
+    const changedNodeCount = results.reduce((sum, result) => sum + (result.changedNodeCount || 0), 0);
+    const changedCharacterCount = results.reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
+    const skippedCount = results.filter((result) => result.skipped).length;
+    const lowConfidenceCount = recognitions.reduce(
+      (sum, recognition) => sum + (recognition.entries || []).filter((entry) => !entry.manual && entry.confidence < 0.78).length,
+      0,
+    );
+
+    return {
+      documentCount: applied.scan?.documentCount || 0,
+      fontFaceCount: applied.scan?.fontFaceCount || 0,
+      candidateCount: applied.scan?.candidateCount || 0,
+      fontCount: applied.scan?.fonts?.length || 0,
+      resultCount: results.length,
+      recognitionCount: recognitions.length,
+      changedNodeCount,
+      changedCharacterCount,
+      skippedCount,
+      lowConfidenceCount,
+    };
+  }
+
+  function scheduleAutoApplyAttempt(_reason = "timer", attempt = 1, delay = AUTO_APPLY_IDLE_INTERVAL_MS) {
     if (window.top !== window) {
       return;
     }
 
     clearTimeout(autoApplyTimer);
+    Object.assign(autoApplyDiagnostics, {
+      status: "scheduled",
+      lastScheduleReason: _reason,
+      lastScheduledAt: Date.now(),
+      nextRunAt: Date.now() + Math.max(0, delay),
+    });
     autoApplyTimer = setTimeout(() => {
-      runAutoApplyIfEnabled(1).catch((error) => {
+      runAutoApplyIfEnabled(attempt, _reason).catch((error) => {
         console.warn("[GlyphCopy] auto apply scheduled run failed", error);
       });
-    }, delay);
+    }, Math.max(0, delay));
   }
 
-  async function runAutoApplyIfEnabled(attempt = 1) {
+  function scheduleAutoApply(reason = "timer", delay = AUTO_APPLY_IDLE_INTERVAL_MS) {
+    scheduleAutoApplyAttempt(reason, 1, delay);
+  }
+
+  function startAutoApply(reason = "timer", delay = AUTO_APPLY_IDLE_INTERVAL_MS) {
+    if (window.top !== window) {
+      return;
+    }
+
+    installAutoApplyObservers();
+    scheduleAutoApply(reason, delay);
+  }
+
+  async function runAutoApplyIfEnabled(attempt = 1, trigger = "timer") {
     if (window.top !== window) {
       return null;
     }
 
     const state = await getAutoApplyState();
     if (!state.enabled) {
-      clearTimeout(autoApplyTimer);
+      stopAutoApply();
       return null;
     }
 
     installAutoApplyObservers();
 
     if (autoApplyRunning) {
+      Object.assign(autoApplyDiagnostics, {
+        status: "busy",
+        lastScheduleReason: trigger,
+      });
       scheduleAutoApply("busy");
       return null;
     }
 
     autoApplyRunning = true;
     let applied = null;
+    const startedAt = Date.now();
+    Object.assign(autoApplyDiagnostics, {
+      status: "running",
+      runCount: autoApplyDiagnostics.runCount + 1,
+      lastStartedAt: startedAt,
+      lastFinishedAt: null,
+      lastDurationMs: null,
+      lastAttempt: attempt,
+      lastTrigger: trigger,
+      lastError: null,
+      nextRunAt: null,
+    });
 
     try {
       applied = await applyMappings({ recognizeIfMissing: true, automatic: true });
       await saveAutoApplyResult(applied);
       installAutoApplyObservers();
+      Object.assign(autoApplyDiagnostics, {
+        status: "success",
+        successCount: autoApplyDiagnostics.successCount + 1,
+        lastFinishedAt: Date.now(),
+        lastDurationMs: Date.now() - startedAt,
+        lastResult: summarizeAutoApplyResult(applied),
+        observerDocumentCount: autoApplyObservers.length,
+      });
 
       const changedCharacterCount = (applied.results || []).reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
       const retryDelay = changedCharacterCount === 0 && attempt < AUTO_APPLY_MAX_ATTEMPTS ? AUTO_APPLY_RETRY_DELAY_MS : AUTO_APPLY_IDLE_INTERVAL_MS;
 
       if (changedCharacterCount === 0 && attempt < AUTO_APPLY_MAX_ATTEMPTS) {
-        setTimeout(() => {
-          runAutoApplyIfEnabled(attempt + 1).catch((error) => {
-            console.warn("[GlyphCopy] auto apply retry failed", error);
-          });
-        }, retryDelay);
+        scheduleAutoApplyAttempt("retry", attempt + 1, retryDelay);
       } else {
         scheduleAutoApply("idle", retryDelay);
+      }
+    } catch (error) {
+      console.warn("[GlyphCopy] auto apply run failed", error);
+      Object.assign(autoApplyDiagnostics, {
+        status: "error",
+        failureCount: autoApplyDiagnostics.failureCount + 1,
+        lastFinishedAt: Date.now(),
+        lastDurationMs: Date.now() - startedAt,
+        lastError: error instanceof Error ? error.message : String(error),
+      });
+      const retryDelay = attempt < AUTO_APPLY_MAX_ATTEMPTS ? AUTO_APPLY_RETRY_DELAY_MS : AUTO_APPLY_IDLE_INTERVAL_MS;
+      if (attempt < AUTO_APPLY_MAX_ATTEMPTS) {
+        scheduleAutoApplyAttempt("error-retry", attempt + 1, retryDelay);
+      } else {
+        scheduleAutoApply("error-idle", retryDelay);
       }
     } finally {
       autoApplyRunning = false;
     }
 
     return applied;
+  }
+
+  function installAutoApplyLifecycleHooks() {
+    if (window.top !== window) {
+      return;
+    }
+
+    window.addEventListener("pageshow", () => scheduleAutoApply("pageshow", 0));
+    window.addEventListener("load", () => scheduleAutoApply("load", 0));
+    document.addEventListener("readystatechange", () => {
+      if (document.readyState === "interactive" || document.readyState === "complete") {
+        scheduleAutoApply("readystatechange", 0);
+      }
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        scheduleAutoApply("visible", 0);
+      }
+    });
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local") {
+        return;
+      }
+
+      let scope;
+      try {
+        scope = autoApplyScopeFromUrl();
+      } catch (_error) {
+        return;
+      }
+
+      const change = changes[scope.key];
+      if (!change) {
+        return;
+      }
+
+      if (change.newValue?.enabled) {
+        startAutoApply("storage", 0);
+      } else {
+        stopAutoApply();
+      }
+    });
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -1740,9 +1921,6 @@
       });
   });
 
-  setTimeout(() => {
-    runAutoApplyIfEnabled(1).catch((error) => {
-      console.warn("[GlyphCopy] auto apply failed", error);
-    });
-  }, AUTO_APPLY_RETRY_DELAY_MS);
+  installAutoApplyLifecycleHooks();
+  scheduleAutoApply("startup", AUTO_APPLY_RETRY_DELAY_MS);
 })();
