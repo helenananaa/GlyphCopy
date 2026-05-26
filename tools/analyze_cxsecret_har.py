@@ -54,6 +54,15 @@ CONFIRMED_MAPPING = {
     0x9852: 0x7AEF,  # duan
 }
 
+LABEL_FONT_CANDIDATES = [
+    Path(r"C:\Windows\Fonts\msyh.ttc"),
+    Path(r"C:\Windows\Fonts\simsun.ttc"),
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path("/System/Library/Fonts/PingFang.ttc"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+]
+
 
 def load_har_text(path: Path) -> list[tuple[str, str]]:
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -73,13 +82,27 @@ def extract_font(entries: list[tuple[str, str]]) -> bytes:
     raise SystemExit("No inline font-cxsecret data URI found.")
 
 
-def render_glyph_sheet(font_path: Path, output_path: Path) -> None:
+def load_label_font(label_font_path: Path | None) -> ImageFont.ImageFont:
+    candidates = [label_font_path] if label_font_path else LABEL_FONT_CANDIDATES
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            return ImageFont.truetype(str(candidate), 14)
+
+    if label_font_path:
+        raise SystemExit(f"Label font not found: {label_font_path}")
+
+    return ImageFont.load_default()
+
+
+def render_glyph_sheet(font_path: Path, output_path: Path, label_font_path: Path | None = None) -> None:
     font = TTFont(str(font_path))
-    cmap = next(table.cmap for table in font["cmap"].tables if table.isUnicode())
+    cmap = next((table.cmap for table in font["cmap"].tables if table.isUnicode()), None)
+    if cmap is None:
+        raise SystemExit(f"No Unicode cmap found in {font_path}")
     codes = sorted(cmap)
 
     glyph_font = ImageFont.truetype(str(font_path), 72)
-    label_font = ImageFont.truetype(r"C:\Windows\Fonts\msyh.ttc", 14)
+    label_font = load_label_font(label_font_path)
     cell_w, cell_h, cols = 150, 130, 5
     rows = math.ceil(len(codes) / cols)
     image = Image.new("RGB", (cols * cell_w, rows * cell_h), "white")
@@ -120,6 +143,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("har", type=Path)
     parser.add_argument("--out", type=Path, default=Path("artifacts"))
+    parser.add_argument("--label-font", type=Path, default=None)
     args = parser.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -127,7 +151,7 @@ def main() -> None:
     font_path = args.out / "cxsecret.ttf"
     font_path.write_bytes(extract_font(entries))
 
-    render_glyph_sheet(font_path, args.out / "cxsecret_glyphs.png")
+    render_glyph_sheet(font_path, args.out / "cxsecret_glyphs.png", args.label_font)
     (args.out / "cxsecret_mapping.json").write_text(
         json.dumps({chr(src): chr(dst) for src, dst in CONFIRMED_MAPPING.items()}, ensure_ascii=False, indent=2),
         encoding="utf-8",

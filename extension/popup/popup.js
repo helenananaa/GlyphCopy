@@ -377,11 +377,18 @@ function collectMappingCacheEntries(items) {
 
   for (const [key, value] of Object.entries(items || {})) {
     if (key.startsWith(CACHE_PREFIX) && isMappingCacheValue(value)) {
-      entries[key] = value;
+      entries[key] = mappingCacheValueForExport(value);
     }
   }
 
   return entries;
+}
+
+function mappingCacheValueForExport(value) {
+  return {
+    ...value,
+    entries: (value.entries || []).map(({ glyphPreview: _glyphPreview, ...entry }) => entry),
+  };
 }
 
 function normalizeImportedMappingKey(key, value) {
@@ -408,7 +415,7 @@ function normalizeImportedMappingPayload(payload) {
   if (isMappingCacheValue(payload)) {
     const storageKey = normalizeImportedMappingKey(payload.fontHash || "", payload);
     if (storageKey) {
-      return { entries: { [storageKey]: payload }, rejectedCount: 0 };
+      return { entries: { [storageKey]: mappingCacheValueForExport(payload) }, rejectedCount: 0 };
     }
   }
 
@@ -423,7 +430,7 @@ function normalizeImportedMappingPayload(payload) {
       continue;
     }
 
-    entries[storageKey] = value;
+    entries[storageKey] = mappingCacheValueForExport(value);
   }
 
   if (Object.keys(entries).length === 0) {
@@ -437,12 +444,15 @@ function downloadJson(filename, payload) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }
 
 async function exportMappingCache() {
@@ -607,7 +617,7 @@ function renderAutoApplyDiagnostics(autoApply) {
 function renderAutoApply(autoApply) {
   latestAutoApply = autoApply;
   autoApplyToggle.checked = Boolean(autoApply?.enabled);
-  autoApplyToggle.disabled = false;
+  autoApplyToggle.disabled = !autoApply;
 
   if (!autoApply) {
     autoApplyMeta.textContent = "当前页面不可用";
@@ -656,16 +666,15 @@ async function setAutoApply(enabled) {
     }
 
     renderAutoApply(response.autoApply);
-    setStatus(enabled ? "自动替换已开启，正在应用当前页面..." : "自动替换已关闭。");
+    setStatus(enabled ? "自动替换已开启，正在等待自动应用..." : "自动替换已关闭。");
     if (enabled) {
-      await applyCurrentTab();
       await refreshAutoApplyState();
     }
   } catch (error) {
     autoApplyToggle.checked = Boolean(latestAutoApply?.enabled);
     setStatus(error instanceof Error ? error.message : String(error));
   } finally {
-    autoApplyToggle.disabled = false;
+    autoApplyToggle.disabled = !latestAutoApply;
   }
 }
 

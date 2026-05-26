@@ -13,17 +13,126 @@ CANVAS_SIZE = 128
 FONT_SIZE = 96
 ALPHA_THRESHOLD = 48
 
+FONT_CANDIDATES = [
+    Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
+    Path(r"C:\Windows\Fonts\msyh.ttc"),
+    Path(r"C:\Windows\Fonts\simsun.ttc"),
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path("/System/Library/Fonts/PingFang.ttc"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+]
+
 
 def extract_js_string_constant(source: str, name: str) -> str:
     match = re.search(rf"const\s+{re.escape(name)}\s*=\s*([\s\S]*?);", source)
     if not match:
         raise SystemExit(f"Cannot find JS constant {name}")
 
-    expression = match.group(1).strip()
-    if not expression.startswith('"') or not expression.endswith('"'):
-        raise SystemExit(f"JS constant {name} must be a double-quoted string")
+    return parse_js_string_expression(match.group(1).strip(), name)
 
-    return json.loads(expression)
+
+def parse_js_string_expression(expression: str, name: str) -> str:
+    parts: list[str] = []
+    index = 0
+    while index < len(expression):
+        index = skip_js_whitespace(expression, index)
+        if index >= len(expression):
+            break
+
+        if expression[index] not in "\"'`":
+            raise SystemExit(f"JS constant {name} must be a string literal or concatenated string literals")
+
+        value, index = parse_js_string_literal(expression, index, name)
+        parts.append(value)
+        index = skip_js_whitespace(expression, index)
+        if index >= len(expression):
+            break
+        if expression[index] != "+":
+            raise SystemExit(f"JS constant {name} contains unsupported expression syntax")
+        index += 1
+
+    if not parts:
+        raise SystemExit(f"JS constant {name} is empty")
+
+    return "".join(parts)
+
+
+def skip_js_whitespace(expression: str, index: int) -> int:
+    while index < len(expression) and expression[index].isspace():
+        index += 1
+    return index
+
+
+def parse_js_string_literal(expression: str, start: int, name: str) -> tuple[str, int]:
+    quote = expression[start]
+    index = start + 1
+    chars: list[str] = []
+    while index < len(expression):
+        char = expression[index]
+        if char == quote:
+            return "".join(chars), index + 1
+        if quote == "`" and char == "$" and index + 1 < len(expression) and expression[index + 1] == "{":
+            raise SystemExit(f"JS constant {name} template string must not contain interpolation")
+        if char != "\\":
+            chars.append(char)
+            index += 1
+            continue
+
+        decoded, index = decode_js_escape(expression, index)
+        if decoded is not None:
+            chars.append(decoded)
+
+    raise SystemExit(f"JS constant {name} has an unterminated string literal")
+
+
+def decode_js_escape(expression: str, slash_index: int) -> tuple[str | None, int]:
+    index = slash_index + 1
+    if index >= len(expression):
+        return "\\", index
+
+    char = expression[index]
+    simple_escapes = {
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "v": "\v",
+        "0": "\0",
+    }
+    if char in simple_escapes:
+        return simple_escapes[char], index + 1
+    if char in "\r\n":
+        if char == "\r" and index + 1 < len(expression) and expression[index + 1] == "\n":
+            return None, index + 2
+        return None, index + 1
+    if char == "x" and index + 2 < len(expression):
+        return chr(int(expression[index + 1 : index + 3], 16)), index + 3
+    if char == "u":
+        if index + 1 < len(expression) and expression[index + 1] == "{":
+            end = expression.find("}", index + 2)
+            if end < 0:
+                raise SystemExit("Unterminated JS unicode escape")
+            return chr(int(expression[index + 2 : end], 16)), end + 1
+        if index + 4 < len(expression):
+            return chr(int(expression[index + 1 : index + 5], 16)), index + 5
+
+    return char, index + 1
+
+
+def resolve_font_path(requested: Path | None) -> Path:
+    if requested:
+        if requested.exists():
+            return requested
+        raise SystemExit(f"Font not found: {requested}")
+
+    for candidate in FONT_CANDIDATES:
+        if candidate.exists():
+            return candidate
+
+    candidates = ", ".join(str(path) for path in FONT_CANDIDATES)
+    raise SystemExit(f"No default Chinese font found. Pass --font explicitly. Checked: {candidates}")
 
 
 def load_candidates(content_js: Path) -> list[str]:
@@ -116,12 +225,13 @@ def fingerprint_char(font: ImageFont.FreeTypeFont, char: str) -> dict[str, objec
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--content-js", type=Path, default=Path("extension/content/content.js"))
-    parser.add_argument("--font", type=Path, default=Path(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"))
+    parser.add_argument("--font", type=Path, default=None)
     parser.add_argument("--out", type=Path, default=Path("extension/data/glyph-fingerprints-noto-sans-sc.json"))
     args = parser.parse_args()
 
     candidates = load_candidates(args.content_js)
-    font = ImageFont.truetype(str(args.font), FONT_SIZE)
+    font_path = resolve_font_path(args.font)
+    font = ImageFont.truetype(str(font_path), FONT_SIZE)
     entries = []
 
     for char in candidates:
@@ -131,7 +241,7 @@ def main() -> None:
 
     payload = {
         "version": 1,
-        "font": args.font.name,
+        "font": font_path.name,
         "gridSize": GRID_SIZE,
         "candidateCount": len(entries),
         "entries": entries,

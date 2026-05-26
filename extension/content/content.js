@@ -24,6 +24,7 @@
   const FINGERPRINT_DICTIONARY_PATH = "data/glyph-fingerprints-noto-sans-sc.json";
   const FINGERPRINT_TOP_CANDIDATES = 40;
   const FINGERPRINT_CANVAS_ACCEPT_THRESHOLD = 0.72;
+  const LOW_CONFIDENCE_THRESHOLD = 0.78;
   const AUTO_APPLY_RETRY_DELAY_MS = 2500;
   const AUTO_APPLY_MAX_ATTEMPTS = 3;
   const AUTO_APPLY_IDLE_INTERVAL_MS = 5000;
@@ -39,6 +40,8 @@
   let autoApplyTimer = null;
   let autoApplyObserverTimer = null;
   let autoApplyRunning = false;
+  let applyingPromise = null;
+  let suppressNextAutoApplyStorageChangeForKey = null;
   const autoApplyDiagnostics = {
     status: "idle",
     runCount: 0,
@@ -285,12 +288,24 @@
       .includes(family.toLowerCase());
   }
 
+  function classListContainsFamily(element, family) {
+    if (!family || /\s/.test(family)) {
+      return false;
+    }
+
+    try {
+      return Boolean(element.classList && element.classList.contains(family));
+    } catch (_error) {
+      return false;
+    }
+  }
+
   function collectCandidateRoots(doc, family) {
     const roots = new Set();
 
     if (family) {
       for (const element of doc.querySelectorAll("*")) {
-        if (element.classList && element.classList.contains(family)) {
+        if (classListContainsFamily(element, family)) {
           roots.add(element);
         }
       }
@@ -827,8 +842,32 @@
 
   function effectiveMappingForRecognition(recognition) {
     return {
-      ...(recognition?.mapping || {}),
-      ...(recognition?.manualMapping || {}),
+      ...sanitizeMapping(recognition?.mapping || {}),
+      ...sanitizeMapping(recognition?.manualMapping || {}),
+    };
+  }
+
+  function sanitizeMapping(mapping) {
+    const sanitized = {};
+    for (const [source, target] of Object.entries(mapping || {})) {
+      if (typeof target === "string" && target.length > 0) {
+        sanitized[source] = target;
+      }
+    }
+
+    return sanitized;
+  }
+
+  function recognitionForStorage(recognition) {
+    if (!recognition) {
+      return recognition;
+    }
+
+    return {
+      ...recognition,
+      mapping: sanitizeMapping(recognition.mapping || {}),
+      manualMapping: sanitizeMapping(recognition.manualMapping || {}),
+      entries: (recognition.entries || []).map(({ glyphPreview: _glyphPreview, ...entry }) => entry),
     };
   }
 
@@ -837,7 +876,7 @@
       return recognition;
     }
 
-    const manualMapping = recognition.manualMapping || {};
+    const manualMapping = sanitizeMapping(recognition.manualMapping || {});
     const effectiveMapping = effectiveMappingForRecognition(recognition);
     const manualSources = new Set(Object.keys(manualMapping));
     const entries = (recognition.entries || []).map((entry) => {
@@ -906,12 +945,12 @@
       ...existingRecognition,
       ...patchRecognition,
       mapping: {
-        ...(existingRecognition.mapping || {}),
-        ...(patchRecognition.mapping || {}),
+        ...sanitizeMapping(existingRecognition.mapping || {}),
+        ...sanitizeMapping(patchRecognition.mapping || {}),
       },
       manualMapping: {
-        ...(existingRecognition.manualMapping || {}),
-        ...(patchRecognition.manualMapping || {}),
+        ...sanitizeMapping(existingRecognition.manualMapping || {}),
+        ...sanitizeMapping(patchRecognition.manualMapping || {}),
       },
       confidence: {
         ...(existingRecognition.confidence || {}),
@@ -1012,6 +1051,10 @@
       }
 
       const best = ranked[0] || { char: "", score: 0 };
+      if (!best.char || best.score <= 0) {
+        continue;
+      }
+
       mapping[sourceChar] = best.char;
       confidence[sourceChar] = Number(best.score.toFixed(4));
       entries.push({
@@ -1056,7 +1099,7 @@
     const recognitionForReturn = applyManualOverridesToRecognition(mergedRecognition);
 
     if (fontScan.cacheKey) {
-      await storageSet(fontScan.cacheKey, recognitionForReturn);
+      await storageSet(fontScan.cacheKey, recognitionForStorage(recognitionForReturn));
     }
 
     return recognitionForReturn;
@@ -1148,7 +1191,15 @@
       updatedAt: Date.now(),
     };
 
-    await storageSet(current.scope.key, next);
+    suppressNextAutoApplyStorageChangeForKey = current.scope.key;
+    try {
+      await storageSet(current.scope.key, next);
+    } catch (error) {
+      if (suppressNextAutoApplyStorageChangeForKey === current.scope.key) {
+        suppressNextAutoApplyStorageChangeForKey = null;
+      }
+      throw error;
+    }
     if (next.enabled) {
       startAutoApply("enabled", 0);
     } else {
@@ -1167,17 +1218,14 @@
     const changedNodeCount = (appliedResult.results || []).reduce((sum, result) => sum + (result.changedNodeCount || 0), 0);
     const changedCharacterCount = (appliedResult.results || []).reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
     const lowConfidenceCount = (appliedResult.recognitions || []).reduce(
-      (sum, recognition) => sum + (recognition.entries || []).filter((entry) => !entry.manual && entry.confidence < 0.78).length,
+      (sum, recognition) => sum + (recognition.entries || []).filter((entry) => !entry.manual && entry.confidence < LOW_CONFIDENCE_THRESHOLD).length,
       0,
     );
-    const lastResult =
-      changedCharacterCount === 0 && (current.lastResult?.changedCharacterCount || 0) > 0
-        ? current.lastResult
-        : {
-            changedNodeCount,
-            changedCharacterCount,
-            lowConfidenceCount,
-          };
+    const lastResult = {
+      changedNodeCount,
+      changedCharacterCount,
+      lowConfidenceCount,
+    };
     const next = {
       ...current,
       lastAppliedAt: Date.now(),
@@ -1256,7 +1304,6 @@
         documentUrl: face.documentUrl,
         documentTitle: face.documentTitle,
         sourceType: face.isDataUri ? "data-uri" : "url",
-        sourcePreview: face.isDataUri ? face.src.slice(0, 64) + "..." : face.src,
         byteLength,
         fontHash,
         fontCodePoints: fontCodePoints.map((codePoint) => `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`),
@@ -1366,7 +1413,12 @@
             replacementOriginals.set(textNode, before);
           }
           changedNodeCount += 1;
-          changedCharacterCount += Array.from(before).filter((char) => mapping[char]).length;
+          changedCharacterCount += Array.from(before).filter((char) => {
+            if (!Object.prototype.hasOwnProperty.call(mapping, char)) {
+              return false;
+            }
+            return mapping[char] !== char;
+          }).length;
           textNode.nodeValue = after;
         }
       }
@@ -1432,7 +1484,7 @@
     }
   }
 
-  async function applyMappings(options = {}) {
+  async function applyMappingsOnce(options = {}) {
     const scanResult = await scan();
     const documents = collectAccessibleDocuments(window);
     const results = [];
@@ -1489,6 +1541,17 @@
       recognitions,
       scan: scanResult,
     };
+  }
+
+  async function applyMappings(options = {}) {
+    if (applyingPromise) {
+      return applyingPromise;
+    }
+
+    applyingPromise = applyMappingsOnce(options).finally(() => {
+      applyingPromise = null;
+    });
+    return applyingPromise;
   }
 
   function restoreOriginalsInDocument(documentInfo) {
@@ -1549,7 +1612,6 @@
       });
 
       observer.observe(documentInfo.document.body, {
-        attributes: true,
         childList: true,
         characterData: true,
         subtree: true,
@@ -1581,7 +1643,7 @@
     const changedCharacterCount = results.reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
     const skippedCount = results.filter((result) => result.skipped).length;
     const lowConfidenceCount = recognitions.reduce(
-      (sum, recognition) => sum + (recognition.entries || []).filter((entry) => !entry.manual && entry.confidence < 0.78).length,
+      (sum, recognition) => sum + (recognition.entries || []).filter((entry) => !entry.manual && entry.confidence < LOW_CONFIDENCE_THRESHOLD).length,
       0,
     );
 
@@ -1743,6 +1805,11 @@
 
       const change = changes[scope.key];
       if (!change) {
+        return;
+      }
+
+      if (suppressNextAutoApplyStorageChangeForKey === scope.key) {
+        suppressNextAutoApplyStorageChangeForKey = null;
         return;
       }
 
