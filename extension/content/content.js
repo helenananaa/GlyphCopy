@@ -26,11 +26,19 @@
   const FINGERPRINT_CANVAS_ACCEPT_THRESHOLD = 0.72;
   const AUTO_APPLY_RETRY_DELAY_MS = 2500;
   const AUTO_APPLY_MAX_ATTEMPTS = 3;
+  const AUTO_APPLY_IDLE_INTERVAL_MS = 5000;
+  const AUTO_APPLY_MUTATION_DEBOUNCE_MS = 900;
   const replacementOriginals = new WeakMap();
   const replacementObservers = [];
+  let replacementObserverDocuments = new WeakSet();
+  const autoApplyObservers = [];
+  const autoApplyObserverDocuments = new WeakSet();
   let replacementObserverTimer = null;
   let replacementEnabled = false;
   let fingerprintDictionaryPromise = null;
+  let autoApplyTimer = null;
+  let autoApplyObserverTimer = null;
+  let autoApplyRunning = false;
 
   const DOMAIN_RECOGNITION_CANDIDATES =
     "数字系统采用可以将减法运算转化为加法原码反码补码真值逻辑电路门与或非异或同或输入输出编码译码器信号二进制十进制八进制十六进制位权权值基数进位借位小数整数无符号有符号机器数表示范围溢出校验奇偶校验格雷码BCD码ASCII码触发器状态方程次态现态初态波形图所示端时钟脉冲上升沿下降沿边沿电平同步异步置位复位清零保持翻转计数器寄存器移位全加器半加器比较器选择器多路选择器数据选择器函数表达式卡诺图化简最小项最大项约束项无关项组合逻辑时序逻辑";
@@ -1353,13 +1361,9 @@
   }
 
   function installReplacementObservers() {
-    if (replacementObservers.length > 0) {
-      return;
-    }
-
     const documents = collectAccessibleDocuments(window);
     for (const documentInfo of documents) {
-      if (!documentInfo.document.body) {
+      if (!documentInfo.document.body || replacementObserverDocuments.has(documentInfo.document)) {
         continue;
       }
 
@@ -1381,6 +1385,7 @@
         subtree: true,
       });
       replacementObservers.push(observer);
+      replacementObserverDocuments.add(documentInfo.document);
     }
   }
 
@@ -1467,6 +1472,7 @@
     for (const observer of replacementObservers.splice(0)) {
       observer.disconnect();
     }
+    replacementObserverDocuments = new WeakSet();
 
     const documents = collectAccessibleDocuments(window);
     const results = documents.map(restoreOriginalsInDocument).filter((result) => result.restoredNodeCount > 0);
@@ -1480,6 +1486,48 @@
     };
   }
 
+  function installAutoApplyObservers() {
+    if (window.top !== window) {
+      return;
+    }
+
+    const documents = collectAccessibleDocuments(window);
+    for (const documentInfo of documents) {
+      if (!documentInfo.document.body || autoApplyObserverDocuments.has(documentInfo.document)) {
+        continue;
+      }
+
+      const Observer = documentInfo.window.MutationObserver;
+      const observer = new Observer(() => {
+        clearTimeout(autoApplyObserverTimer);
+        autoApplyObserverTimer = setTimeout(() => {
+          scheduleAutoApply("mutation", 0);
+        }, AUTO_APPLY_MUTATION_DEBOUNCE_MS);
+      });
+
+      observer.observe(documentInfo.document.body, {
+        attributes: true,
+        childList: true,
+        subtree: true,
+      });
+      autoApplyObservers.push(observer);
+      autoApplyObserverDocuments.add(documentInfo.document);
+    }
+  }
+
+  function scheduleAutoApply(_reason = "timer", delay = AUTO_APPLY_IDLE_INTERVAL_MS) {
+    if (window.top !== window) {
+      return;
+    }
+
+    clearTimeout(autoApplyTimer);
+    autoApplyTimer = setTimeout(() => {
+      runAutoApplyIfEnabled(1).catch((error) => {
+        console.warn("[GlyphCopy] auto apply scheduled run failed", error);
+      });
+    }, delay);
+  }
+
   async function runAutoApplyIfEnabled(attempt = 1) {
     if (window.top !== window) {
       return null;
@@ -1487,19 +1535,39 @@
 
     const state = await getAutoApplyState();
     if (!state.enabled) {
+      clearTimeout(autoApplyTimer);
       return null;
     }
 
-    const applied = await applyMappings({ recognizeIfMissing: true, automatic: true });
-    await saveAutoApplyResult(applied);
-    const changedCharacterCount = (applied.results || []).reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
+    installAutoApplyObservers();
 
-    if (changedCharacterCount === 0 && attempt < AUTO_APPLY_MAX_ATTEMPTS) {
-      setTimeout(() => {
-        runAutoApplyIfEnabled(attempt + 1).catch((error) => {
-          console.warn("[GlyphCopy] auto apply retry failed", error);
-        });
-      }, AUTO_APPLY_RETRY_DELAY_MS);
+    if (autoApplyRunning) {
+      scheduleAutoApply("busy");
+      return null;
+    }
+
+    autoApplyRunning = true;
+    let applied = null;
+
+    try {
+      applied = await applyMappings({ recognizeIfMissing: true, automatic: true });
+      await saveAutoApplyResult(applied);
+      installAutoApplyObservers();
+
+      const changedCharacterCount = (applied.results || []).reduce((sum, result) => sum + (result.changedCharacterCount || 0), 0);
+      const retryDelay = changedCharacterCount === 0 && attempt < AUTO_APPLY_MAX_ATTEMPTS ? AUTO_APPLY_RETRY_DELAY_MS : AUTO_APPLY_IDLE_INTERVAL_MS;
+
+      if (changedCharacterCount === 0 && attempt < AUTO_APPLY_MAX_ATTEMPTS) {
+        setTimeout(() => {
+          runAutoApplyIfEnabled(attempt + 1).catch((error) => {
+            console.warn("[GlyphCopy] auto apply retry failed", error);
+          });
+        }, retryDelay);
+      } else {
+        scheduleAutoApply("idle", retryDelay);
+      }
+    } finally {
+      autoApplyRunning = false;
     }
 
     return applied;

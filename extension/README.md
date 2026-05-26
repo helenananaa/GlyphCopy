@@ -26,8 +26,9 @@ Chrome MV3 prototype for extracting Chaoxing font-obfuscated text.
 - Popup `自动替换超星页面` is off by default. When enabled, GlyphCopy stores one
   `chaoxing.com` domain-wide setting and automatically scans, recognizes, and
   applies replacements on later Chaoxing page loads. Pages without suspicious
-  fonts are scanned and left unchanged. The startup path retries a few times so
-  nested Chaoxing iframes have time to load.
+  fonts are scanned and left unchanged. While enabled, the content script keeps a
+  low-frequency scan loop and mutation-triggered retry so late-loading or
+  swapped Chaoxing iframes are handled without reopening the popup.
 - The recognition panel supports manual corrections. Automatic mappings are
   stored in `mapping`, user corrections are stored in `manualMapping`, and page
   replacement uses `manualMapping` over `mapping`.
