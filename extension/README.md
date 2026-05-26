@@ -20,6 +20,8 @@ Chrome MV3 prototype for extracting Chaoxing font-obfuscated text.
   observed codepoints missing from that cache are matched and merged back.
 - Checks `chrome.storage.local` for the mapping cache key:
   `glyphcopy:mapping:<fontHash>`.
+- Popup import/export stores and restores all cached mapping entries using a
+  JSON payload containing the original `glyphcopy:mapping:<fontHash>` keys.
 - Popup `应用替换` applies cached or freshly recognized mappings only to text
   nodes under the matching suspicious font. `恢复原文` restores the original text
   in the current page session.
@@ -47,9 +49,9 @@ Chrome MV3 prototype for extracting Chaoxing font-obfuscated text.
 
 Improve replacement:
 
-1. Add import/export for cached mappings.
-2. Add optional page-side low-confidence highlighting, default off.
-3. Add a larger fallback dictionary for non-course domains.
+1. Add optional page-side low-confidence highlighting, default off.
+2. Add a larger fallback dictionary for non-course domains.
+3. Add a small cache-management view for deleting stale font mappings.
 
 ## Fingerprint dictionary
 

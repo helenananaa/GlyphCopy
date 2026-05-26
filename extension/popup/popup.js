@@ -17,6 +17,9 @@ const recognizeButton = document.querySelector("#recognizeButton");
 const applyButton = document.querySelector("#applyButton");
 const restoreButton = document.querySelector("#restoreButton");
 const copyButton = document.querySelector("#copyButton");
+const importMappingsButton = document.querySelector("#importMappingsButton");
+const exportMappingsButton = document.querySelector("#exportMappingsButton");
+const importMappingsInput = document.querySelector("#importMappingsInput");
 const autoApplyToggle = document.querySelector("#autoApplyToggle");
 const autoApplyMeta = document.querySelector("#autoApplyMeta");
 const autoApplyDiagnosticsElement = document.querySelector("#autoApplyDiagnostics");
@@ -44,14 +47,58 @@ function shortHash(hash) {
 }
 
 async function storageGet(key) {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(key, (result) => resolve(result[key]));
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(key, (result) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+
+      resolve(result[key]);
+    });
   });
 }
 
 async function storageSet(key, value) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ [key]: value }, resolve);
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [key]: value }, () => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+async function storageGetAll() {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(null, (result) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+
+      resolve(result || {});
+    });
+  });
+}
+
+async function storageSetMany(values) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(values, () => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+
+      resolve();
+    });
   });
 }
 
@@ -304,6 +351,150 @@ async function saveManualCorrections(fontHash) {
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0];
+}
+
+function setMappingCacheButtonsDisabled(disabled) {
+  importMappingsButton.disabled = disabled;
+  exportMappingsButton.disabled = disabled;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isMappingCacheValue(value) {
+  return (
+    isPlainObject(value) &&
+    (isPlainObject(value.mapping) ||
+      isPlainObject(value.manualMapping) ||
+      isPlainObject(value.effectiveMapping) ||
+      Array.isArray(value.entries))
+  );
+}
+
+function collectMappingCacheEntries(items) {
+  const entries = {};
+
+  for (const [key, value] of Object.entries(items || {})) {
+    if (key.startsWith(CACHE_PREFIX) && isMappingCacheValue(value)) {
+      entries[key] = value;
+    }
+  }
+
+  return entries;
+}
+
+function normalizeImportedMappingKey(key, value) {
+  if (key.startsWith(CACHE_PREFIX)) {
+    return key;
+  }
+
+  if (/^[a-f0-9]{64}$/i.test(key)) {
+    return `${CACHE_PREFIX}${key}`;
+  }
+
+  if (typeof value?.fontHash === "string" && /^[a-f0-9]{64}$/i.test(value.fontHash)) {
+    return `${CACHE_PREFIX}${value.fontHash}`;
+  }
+
+  return null;
+}
+
+function normalizeImportedMappingPayload(payload) {
+  if (!isPlainObject(payload)) {
+    throw new Error("映射文件必须是 JSON 对象");
+  }
+
+  if (isMappingCacheValue(payload)) {
+    const storageKey = normalizeImportedMappingKey(payload.fontHash || "", payload);
+    if (storageKey) {
+      return { entries: { [storageKey]: payload }, rejectedCount: 0 };
+    }
+  }
+
+  const source = isPlainObject(payload.mappings) ? payload.mappings : payload;
+  const entries = {};
+  let rejectedCount = 0;
+
+  for (const [key, value] of Object.entries(source)) {
+    const storageKey = normalizeImportedMappingKey(key, value);
+    if (!storageKey || !isMappingCacheValue(value)) {
+      rejectedCount += 1;
+      continue;
+    }
+
+    entries[storageKey] = value;
+  }
+
+  if (Object.keys(entries).length === 0) {
+    throw new Error("没有找到可导入的映射缓存");
+  }
+
+  return { entries, rejectedCount };
+}
+
+function downloadJson(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportMappingCache() {
+  setMappingCacheButtonsDisabled(true);
+  setStatus("正在导出映射缓存...");
+
+  try {
+    const mappings = collectMappingCacheEntries(await storageGetAll());
+    const mappingCount = Object.keys(mappings).length;
+    if (mappingCount === 0) {
+      setStatus("没有可导出的映射缓存。");
+      return;
+    }
+
+    const exportedAt = new Date().toISOString();
+    const filenameDate = exportedAt.replace(/[:.]/g, "-");
+    downloadJson(`glyphcopy-mappings-${filenameDate}.json`, {
+      schema: "GlyphCopy mapping cache",
+      version: 1,
+      exportedAt,
+      mappingCount,
+      mappings,
+    });
+    setStatus(`已导出 ${mappingCount} 个映射缓存。`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error));
+  } finally {
+    setMappingCacheButtonsDisabled(false);
+  }
+}
+
+async function importMappingCacheFromFile(file) {
+  if (!file) {
+    return;
+  }
+
+  setMappingCacheButtonsDisabled(true);
+  setStatus("正在导入映射缓存...");
+
+  try {
+    const payload = JSON.parse(await file.text());
+    const { entries, rejectedCount } = normalizeImportedMappingPayload(payload);
+    await storageSetMany(entries);
+    const importedCount = Object.keys(entries).length;
+    const suffix = rejectedCount ? `，跳过 ${rejectedCount} 条无效记录` : "";
+    setStatus(`已导入 ${importedCount} 个映射缓存${suffix}。`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error));
+  } finally {
+    importMappingsInput.value = "";
+    setMappingCacheButtonsDisabled(false);
+  }
 }
 
 function formatTime(value) {
@@ -652,6 +843,15 @@ recognizeButton.addEventListener("click", recognizeCurrentTab);
 applyButton.addEventListener("click", applyCurrentTab);
 restoreButton.addEventListener("click", restoreCurrentTab);
 copyButton.addEventListener("click", copyLatestScan);
+exportMappingsButton.addEventListener("click", () => {
+  exportMappingCache();
+});
+importMappingsButton.addEventListener("click", () => {
+  importMappingsInput.click();
+});
+importMappingsInput.addEventListener("change", () => {
+  importMappingCacheFromFile(importMappingsInput.files?.[0]);
+});
 autoApplyToggle.addEventListener("change", () => {
   setAutoApply(autoApplyToggle.checked);
 });
