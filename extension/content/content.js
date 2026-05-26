@@ -1135,7 +1135,12 @@
 
   function autoApplyScopeFromUrl(urlText = location.href) {
     const url = new URL(urlText);
-    const domain = url.hostname.endsWith(".chaoxing.com") || url.hostname === "chaoxing.com" ? "chaoxing.com" : url.hostname;
+    const isChaoxingSite =
+      url.hostname.endsWith(".chaoxing.com") ||
+      url.hostname === "chaoxing.com" ||
+      url.hostname.endsWith(".xuexitong.com") ||
+      url.hostname === "xuexitong.com";
+    const domain = isChaoxingSite ? "chaoxing.com" : url.hostname;
 
     return {
       key: `${AUTO_APPLY_PREFIX}${encodeURIComponent(domain)}`,

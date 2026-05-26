@@ -4,14 +4,14 @@
   "description": "Extract and inspect Chaoxing font-obfuscated text.",
   "version": "0.1.0",
   "permissions": ["activeTab", "storage"],
-  "host_permissions": ["*://*.chaoxing.com/*"],
+  "host_permissions": ["*://*.chaoxing.com/*", "*://*.xuexitong.com/*"],
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "GlyphCopy"
   },
   "content_scripts": [
     {
-      "matches": ["*://*.chaoxing.com/*"],
+      "matches": ["*://*.chaoxing.com/*", "*://*.xuexitong.com/*"],
       "js": ["content/content.js"],
       "run_at": "document_idle",
       "all_frames": true,
@@ -21,7 +21,7 @@
   "web_accessible_resources": [
     {
       "resources": ["data/glyph-fingerprints-noto-sans-sc.json"],
-      "matches": ["*://*.chaoxing.com/*"]
+      "matches": ["*://*.chaoxing.com/*", "*://*.xuexitong.com/*"]
     }
   ]
 }

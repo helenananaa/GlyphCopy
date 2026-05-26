@@ -1,62 +1,76 @@
 # GlyphCopy Extension
 
-Chrome MV3 prototype for extracting Chaoxing font-obfuscated text.
+This folder is the unpacked Chrome/Edge MV3 extension for GlyphCopy. The
+extension targets Chaoxing (`*.chaoxing.com`) pages that render readable text
+through custom obfuscated fonts.
 
-## Current scope
+For the full project overview, tool commands, and validation checklist, see the
+repository README at `..\README.md`.
 
-- Finds inline `@font-face` rules on `*.chaoxing.com`.
+## Runtime Scope
+
+- Finds suspicious `@font-face` rules on Chaoxing pages.
 - Prioritizes `font-cxsecret` and embedded data URI fonts.
 - Decodes embedded font bytes and calculates a SHA-256 font hash.
-- Parses the font `cmap` table so the popup can isolate characters actually
-  covered by the suspicious font.
-- Recursively scans same-origin iframes, which is required for Chaoxing work
-  pages where `doHomeWorkNew` is nested under the chapter page.
+- Parses the font `cmap` table to isolate covered codepoints.
+- Scans accessible same-origin documents and iframes from the top page.
+- Loads into matching frames through `all_frames` and `match_about_blank`.
 - Collects text nodes rendered with the suspicious font family.
-- Reports suspicious characters, codepoints, counts, and sample text in the popup.
-- Popup `刷新识别` converts each suspicious glyph into a 28x28 fingerprint,
-  ranks it against the bundled common-Chinese glyph dictionary, then rerenders
-  the top matches in canvas for final bitmap/projection scoring.
-  Recognition is incremental: if a font hash already has a partial cache, only
-  observed codepoints missing from that cache are matched and merged back.
-- Checks `chrome.storage.local` for the mapping cache key:
-  `glyphcopy:mapping:<fontHash>`.
-- Popup import/export stores and restores all cached mapping entries using a
-  JSON payload containing the original `glyphcopy:mapping:<fontHash>` keys.
-- Popup `应用替换` applies cached or freshly recognized mappings only to text
-  nodes under the matching suspicious font. `恢复原文` restores the original text
-  in the current page session.
-- Popup `自动替换超星页面` is off by default. When enabled, GlyphCopy stores one
-  `chaoxing.com` domain-wide setting and automatically scans, recognizes, and
-  applies replacements on later Chaoxing page loads. Pages without suspicious
-  fonts are scanned and left unchanged. While enabled, the content script keeps a
-  low-frequency scan loop and mutation-triggered retry so late-loading or
-  swapped Chaoxing iframes are handled without reopening the popup.
-- The recognition panel supports manual corrections. Automatic mappings are
-  stored in `mapping`, user corrections are stored in `manualMapping`, and page
-  replacement uses `manualMapping` over `mapping`.
-- Low-confidence matches are highlighted only inside the popup inspection panel;
-  page content is not visually marked.
+- Reports suspicious characters, codepoints, counts, and samples in the popup.
+- Recognizes glyphs by 28x28 fingerprint matching plus canvas rescoring.
+- Reuses partial caches by matching only missing observed codepoints.
+- Applies cached or freshly recognized mappings only under the matching font.
+- Restores original page text during the current page session.
+- Supports domain-wide Chaoxing auto apply with diagnostics and retry.
 
-## Local install
+## Popup Actions
 
-1. Open `chrome://extensions`.
+- Scan: detect suspicious fonts and current-page glyph usage.
+- Recognize: refresh mapping candidates for observed glyphs.
+- Apply replacement: replace text nodes using manual mappings first, then
+  automatic mappings.
+- Restore original: undo replacements made during the current page session.
+- Import/export mapping: move mapping-cache JSON between local profiles.
+- Auto apply: persist a Chaoxing-domain setting that scans, recognizes, and
+  applies replacement on later page loads.
+
+Low-confidence recognition rows are highlighted in the popup only. GlyphCopy
+does not currently mark low-confidence text on the page itself.
+
+## Local Install
+
+1. Open `chrome://extensions` or `edge://extensions`.
 2. Enable developer mode.
-3. Load unpacked extension from this folder:
-   `H:\program\GlyphCopy\extension`.
+3. Load the current folder as the unpacked extension:
+
+   ```text
+   extension/
+   ```
+
 4. Open a Chaoxing page and click the GlyphCopy toolbar icon.
 
-## Next step
+## Storage
 
-Improve replacement:
+Mapping entries are stored in `chrome.storage.local` using:
 
-1. Add optional page-side low-confidence highlighting, default off.
-2. Add a larger fallback dictionary for non-course domains.
-3. Add a small cache-management view for deleting stale font mappings.
+```text
+glyphcopy:mapping:<fontHash>
+```
 
-## Fingerprint dictionary
+Automatic mappings are stored in `mapping`; user corrections are stored in
+`manualMapping`. Replacement uses `manualMapping` over `mapping`.
 
-The bundled dictionary lives at `data/glyph-fingerprints-noto-sans-sc.json` and
-is generated from `tools/build_glyph_fingerprint_dict.py`.
+Auto apply state is stored separately under `glyphcopy:autoApply:*` keys.
+
+## Fingerprint Dictionary
+
+The bundled dictionary lives at:
+
+```text
+data/glyph-fingerprints-noto-sans-sc.json
+```
+
+From the repository root, rebuild it with:
 
 ```powershell
 python .\tools\build_glyph_fingerprint_dict.py

@@ -375,7 +375,7 @@ Steps for `analyze_cxsecret_har.py`:
 Steps for `build_glyph_fingerprint_dict.py`:
 
 1. Keep `--font`, but remove the assumption that
-   `C:\Windows\Fonts\NotoSansSC-VF.ttf` exists.
+   a specific local font path exists.
 2. Add font discovery for common Windows fonts, for example Microsoft YaHei or
    SimSun, and require `--font` if no default exists.
 3. Improve the error message to say exactly which font path was missing.
@@ -454,7 +454,7 @@ After all phases:
 1. Reload the unpacked extension from:
 
    ```text
-   H:\program\GlyphCopy\extension
+   <repo>/extension
    ```
 
 2. On a Chaoxing page:
@@ -498,4 +498,3 @@ After all phases:
 8. `fix: inject content script into matching frames`
 9. `fix: harden glyph tooling across environments`
 10. `chore: clean up diagnostics and popup hygiene`
-
