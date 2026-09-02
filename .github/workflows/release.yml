@@ -1,0 +1,115 @@
+name: Release extension
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag; must match extension/manifest.json"
+        required: true
+        default: "v0.1.0"
+        type: string
+      prerelease:
+        description: "Mark this release as a prerelease"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || 'v0.1.0' }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate, package, and publish
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || 'v0.1.0' }}
+      PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_version="$(jq -r '.version' extension/manifest.json)"
+          release_version="${TAG#v}"
+
+          if [[ "${manifest_version}" != "${release_version}" ]]; then
+            echo "manifest version ${manifest_version} does not match tag ${TAG}" >&2
+            exit 1
+          fi
+
+          python -m json.tool extension/manifest.json >/dev/null
+          node --check extension/content/content.js
+          node --check extension/popup/popup.js
+
+      - name: Package extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="GlyphCopy-${TAG}.zip"
+          (
+            cd extension
+            zip -qr "../${archive}" .
+          )
+          unzip -t "${archive}"
+          sha256sum "${archive}" > SHA256SUMS.txt
+
+      - name: Prepare first-release notes
+        if: ${{ env.TAG == 'v0.1.0' }}
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          GlyphCopy 的首个公开版本。
+
+          ### 主要功能
+
+          - 识别超星学习通页面中的字体混淆文本
+          - 将复制后出现乱码的文字恢复为可复制内容
+          - 支持低置信度结果的人工修正
+          - 支持自动替换和映射缓存导入/导出
+          - 所有扫描、识别和替换均在浏览器本地完成
+
+          ### 安装
+
+          1. 下载并解压 `GlyphCopy-v0.1.0.zip`。
+          2. 打开 `chrome://extensions` 或 `edge://extensions`。
+          3. 开启开发者模式，点击“加载已解压的扩展程序”。
+          4. 选择刚刚解压的文件夹。
+
+          当前版本支持 `*.chaoxing.com` 和 `*.xuexitong.com`。
+          EOF
+
+      - name: Publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="GlyphCopy-${TAG}.zip"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${archive}" SHA256SUMS.txt --clobber
+            exit 0
+          fi
+
+          flags=()
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            flags+=(--prerelease)
+          fi
+
+          if [[ -f release-notes.md ]]; then
+            gh release create "${TAG}" "${archive}" SHA256SUMS.txt +              --target "${GITHUB_SHA}" +              --title "GlyphCopy ${TAG}" +              --notes-file release-notes.md +              "${flags[@]}"
+          else
+            gh release create "${TAG}" "${archive}" SHA256SUMS.txt +              --target "${GITHUB_SHA}" +              --title "GlyphCopy ${TAG}" +              --generate-notes +              "${flags[@]}"
+          fi
