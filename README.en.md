@@ -2,8 +2,13 @@
 
 [简体中文](README.md)
 
-Decode Chaoxing/Learning Pass test-chapter font obfuscation so copied text is
-the original readable content instead of garbled characters.
+**Make text that looks readable on Chaoxing but copies as garbled characters readable and copyable again.**
+
+GlyphCopy supports Chrome and Edge. Recognition and replacement run locally in the browser.
+
+[Download project ZIP](https://github.com/helenananaa/GlyphCopy/archive/refs/heads/main.zip) · [Chinese installation guide](docs/INSTALL.zh-CN.md) · [Report an issue](https://github.com/helenananaa/GlyphCopy/issues)
+
+## Before and after
 
 ### Before
 
@@ -13,154 +18,43 @@ the original readable content instead of garbled characters.
 
 ![After: copied text is readable](docs/screenshots/after.png)
 
-GlyphCopy is a local Chrome/Edge MV3 extension for inspecting and replacing
-Chaoxing (`chaoxing.com`) text that is hidden behind custom font glyph
-obfuscation. It is built for pages that look readable on screen but copy as
-garbled or obfuscated characters. The current project also includes small Python
-tools for extracting sample fonts from HAR captures and rebuilding the bundled
-glyph fingerprint dictionary.
+## Install and use
 
-Chinese install guide: [docs/INSTALL.zh-CN.md](docs/INSTALL.zh-CN.md)
+1. [Download the project ZIP](https://github.com/helenananaa/GlyphCopy/archive/refs/heads/main.zip) and extract it.
+2. Open `chrome://extensions` or `edge://extensions`, then enable Developer mode.
+3. Choose “Load unpacked” and select the extracted `extension` folder.
+4. Open a supported Chaoxing page and click the GlyphCopy toolbar icon.
+5. Click Scan → Refresh Recognition → Apply Replacement.
 
-## What It Does
+See the [Chinese installation guide](docs/INSTALL.zh-CN.md) for detailed installation, update, and removal instructions.
 
-- Scans Chaoxing pages for suspicious `@font-face` rules, especially
-  `font-cxsecret` and embedded data URI fonts.
-- Parses the suspicious font `cmap` table and records the observed codepoints
-  used by text nodes on the page.
-- Recursively inspects accessible same-origin documents and iframes.
-- Renders observed glyphs to a 28x28 fingerprint and ranks them against the
-  bundled common Chinese glyph dictionary.
-- Rechecks top matches with canvas bitmap/projection scoring.
-- Stores recognition results in `chrome.storage.local` under
-  `glyphcopy:mapping:<fontHash>`.
-- Lets manual corrections override automatic mappings.
-- Applies mappings back to page text nodes rendered with the matching
-  suspicious font, and can restore the original text during the current page
-  session.
-- Supports a domain-wide Chaoxing auto-apply switch with low-frequency polling,
-  mutation-triggered retry, and popup diagnostics.
-- Imports and exports mapping-cache JSON so confirmed mappings can be reused.
+## Features
 
-## Project Layout
+- Detects text hidden behind custom font glyph obfuscation on Chaoxing pages.
+- Replaces text that copies as garbled characters with readable, copyable content.
+- Supports manual corrections for low-confidence results; manual mappings take priority.
+- Can automatically process later Chaoxing pages; auto-apply is disabled by default.
+- Imports and exports mapping caches for reuse across browser profiles or devices.
+- Can undo replacements during the current page session and restore the page's initial text.
 
-```text
-extension/
-  manifest.json                         Chrome MV3 extension manifest
-  content/content.js                    page scan, recognition, replacement, auto apply
-  popup/                                popup UI
-  data/glyph-fingerprints-noto-sans-sc.json
-                                        bundled glyph fingerprint dictionary
-tools/
-  analyze_cxsecret_har.py               extract cxsecret font and decoded samples from HAR
-  build_glyph_fingerprint_dict.py       rebuild bundled fingerprint dictionary
-docs/
-  bugfix-plan.md                        historical repair plan and validation checklist
-artifacts/                              local generated analysis outputs, gitignored
-output/                                 local browser profiles/runtime copies, gitignored
-```
+## Privacy and permissions
 
-## Install The Extension Locally
+- The extension runs only on `*.chaoxing.com` and `*.xuexitong.com`.
+- Page scanning, glyph recognition, and text replacement happen locally in the browser.
+- Recognition results remain in `chrome.storage.local`; the project does not upload page content.
+- HAR files, exported mappings, and screenshots may contain course or account information. Review and redact them before sharing.
 
-1. Open `chrome://extensions` or `edge://extensions`.
-2. Enable developer mode.
-3. Load the unpacked extension from the repository's `extension/` folder:
+## Current limitations
 
-   ```text
-   extension/
-   ```
+- Automatic recognition is not guaranteed to be perfect. Review low-confidence results and correct them when necessary.
+- The top-level script cannot directly inspect cross-origin iframes; some content may need to be handled in its own frame.
+- Recognition quality depends on the page font and the coverage of the bundled candidate dictionary.
+- The extension currently requires Developer mode and is not published in the Chrome Web Store or Edge Add-ons.
 
-4. Open a Chaoxing page and click the GlyphCopy toolbar icon.
+## Documentation and development
 
-The extension is intentionally limited to `*://*.chaoxing.com/*` by
-`extension/manifest.json`.
+- [Chinese installation guide](docs/INSTALL.zh-CN.md)
+- [Architecture and development guide](docs/DEVELOPMENT.en.md)
+- [MIT License](LICENSE)
+- [Report a bug or request a feature](https://github.com/helenananaa/GlyphCopy/issues)
 
-## Popup Workflow
-
-1. Scan the current page to detect suspicious fonts and text nodes.
-2. Run recognition to build or refresh the mapping cache for observed glyphs.
-3. Review low-confidence rows in the recognition panel.
-4. Enter manual corrections where needed and save them.
-5. Apply replacement to the page.
-6. Restore the original text if the current page session needs to be rolled
-   back.
-
-The auto-apply toggle is off by default. When enabled, GlyphCopy stores one
-Chaoxing-domain setting and later page loads will scan, recognize missing
-glyphs, and apply mappings automatically. Pages without suspicious fonts are
-scanned and left unchanged.
-
-## Mapping Cache
-
-Recognition cache keys use this shape:
-
-```text
-glyphcopy:mapping:<fontHash>
-```
-
-Cached entries keep automatic mappings and `manualMapping`. Page replacement
-uses manual corrections first and falls back to automatic mappings. Live popup
-recognition can include glyph previews for inspection, but persistent/exported
-cache data strips preview data URLs to keep storage small.
-
-## Python Tools
-
-Install tool dependencies in your preferred Python environment:
-
-```powershell
-python -m pip install beautifulsoup4 fonttools pillow
-```
-
-Extract a Chaoxing sample font and decoded blocks from a local HAR capture:
-
-```powershell
-python .\tools\analyze_cxsecret_har.py .\mooc1.chaoxing.com1.har
-```
-
-Rebuild the bundled fingerprint dictionary:
-
-```powershell
-python .\tools\build_glyph_fingerprint_dict.py
-```
-
-If the default Chinese font discovery does not find a suitable font, pass one
-explicitly:
-
-```powershell
-python .\tools\build_glyph_fingerprint_dict.py --font <path-to-chinese-font>
-```
-
-HAR files, generated artifacts, and browser profiles can contain cookies,
-course data, or other local state. They are ignored by git through
-`.gitignore`.
-
-## Validation
-
-Useful static checks after changing the tracked code:
-
-```powershell
-git diff --check
-python -m py_compile .\tools\analyze_cxsecret_har.py .\tools\build_glyph_fingerprint_dict.py
-```
-
-Useful local smoke checks when sample HAR files are available:
-
-```powershell
-python .\tools\analyze_cxsecret_har.py .\mooc1.chaoxing.com1.har
-python .\tools\build_glyph_fingerprint_dict.py
-```
-
-After extension code changes, reload the unpacked extension and verify scan,
-recognize, apply, restore, manual correction, import/export, and auto apply on a
-real Chaoxing page.
-
-## Current Limits
-
-- The extension only declares Chaoxing host permissions.
-- Cross-origin frames cannot be read directly by the top page script. Matching
-  Chaoxing frames can receive their own content script, while the top frame
-  remains the main popup/auto-apply coordinator.
-- Recognition quality depends on the bundled candidate dictionary and the local
-  font used to build `glyph-fingerprints-noto-sans-sc.json`.
-- Low-confidence matches are highlighted in the popup inspection panel only;
-  page content is not visually marked.
