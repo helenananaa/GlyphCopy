@@ -109,7 +109,7 @@ jobs:
           fi
 
           if [[ -f release-notes.md ]]; then
-            gh release create "${TAG}" "${archive}" SHA256SUMS.txt +              --target "${GITHUB_SHA}" +              --title "GlyphCopy ${TAG}" +              --notes-file release-notes.md +              "${flags[@]}"
+            gh release create "${TAG}" "${archive}" SHA256SUMS.txt --target "${GITHUB_SHA}" --title "GlyphCopy ${TAG}" --notes-file release-notes.md "${flags[@]}"
           else
-            gh release create "${TAG}" "${archive}" SHA256SUMS.txt +              --target "${GITHUB_SHA}" +              --title "GlyphCopy ${TAG}" +              --generate-notes +              "${flags[@]}"
+            gh release create "${TAG}" "${archive}" SHA256SUMS.txt --target "${GITHUB_SHA}" --title "GlyphCopy ${TAG}" --generate-notes "${flags[@]}"
           fi
