@@ -5,7 +5,7 @@
 ## 适用场景
 
 GlyphCopy 用于解析超星学习通测试章节中的字体混淆，让页面文本可以复制为原文，而
-不是乱码或混淆字符。扩展只声明 `*.chaoxing.com` 站点权限，识别和替换都在本地浏
+不是乱码或混淆字符。扩展仅声明 `*.chaoxing.com` 和 `*.xuexitong.com` 站点权限，识别和替换都在本地浏
 览器里完成。
 
 ## 准备文件
@@ -103,7 +103,7 @@ glyphcopy:mapping:<fontHash>
 
 ### 打开 popup 后提示当前页面不可用
 
-确认当前页面是不是 `chaoxing.com` 域名。GlyphCopy 的站点权限只覆盖超星页面，普
+确认当前页面是否属于 `chaoxing.com` 或 `xuexitong.com`。GlyphCopy 的站点权限只覆盖这些超星学习通页面，普
 通网页、浏览器设置页、扩展管理页都不会注入 content script。
 
 ### 扫描不到可疑字体
