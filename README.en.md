@@ -6,7 +6,7 @@
 
 GlyphCopy supports Chrome and Edge. Recognition and replacement run locally in the browser.
 
-[Download project ZIP](https://github.com/helenananaa/GlyphCopy/archive/refs/heads/main.zip) · [Chinese installation guide](docs/INSTALL.zh-CN.md) · [Report an issue](https://github.com/helenananaa/GlyphCopy/issues)
+[Download the latest release](https://github.com/helenananaa/GlyphCopy/releases/latest) · [Chinese installation guide](docs/INSTALL.zh-CN.md) · [Report an issue](https://github.com/helenananaa/GlyphCopy/issues)
 
 ## Before and after
 
@@ -20,7 +20,7 @@ GlyphCopy supports Chrome and Edge. Recognition and replacement run locally in t
 
 ## Install and use
 
-1. [Download the project ZIP](https://github.com/helenananaa/GlyphCopy/archive/refs/heads/main.zip) and extract it.
+1. [Download the latest release](https://github.com/helenananaa/GlyphCopy/releases/latest), get `GlyphCopy-v0.1.0.zip` from Assets, and extract it.
 2. Open `chrome://extensions` or `edge://extensions`, then enable Developer mode.
 3. Choose “Load unpacked” and select the extracted `extension` folder.
 4. Open a supported Chaoxing page and click the GlyphCopy toolbar icon.
@@ -57,4 +57,3 @@ See the [Chinese installation guide](docs/INSTALL.zh-CN.md) for detailed install
 - [Architecture and development guide](docs/DEVELOPMENT.en.md)
 - [MIT License](LICENSE)
 - [Report a bug or request a feature](https://github.com/helenananaa/GlyphCopy/issues)
-
