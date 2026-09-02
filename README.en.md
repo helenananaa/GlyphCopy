@@ -5,9 +5,13 @@
 Decode Chaoxing/Learning Pass test-chapter font obfuscation so copied text is
 the original readable content instead of garbled characters.
 
-| Before | After |
-| --- | --- |
-| ![Before: copied text is garbled](docs/screenshots/before.png) | ![After: copied text is readable](docs/screenshots/after.png) |
+### Before
+
+![Before: copied text is garbled](docs/screenshots/before.png)
+
+### After
+
+![After: copied text is readable](docs/screenshots/after.png)
 
 GlyphCopy is a local Chrome/Edge MV3 extension for inspecting and replacing
 Chaoxing (`chaoxing.com`) text that is hidden behind custom font glyph
