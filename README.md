@@ -4,9 +4,13 @@
 
 解析超星学习通测试章节的字体混淆，可以复制原文而不是乱码。
 
-| 使用前 | 使用后 |
-| --- | --- |
-| ![使用前：复制出来是乱码](docs/screenshots/before.png) | ![使用后：复制出来是原文](docs/screenshots/after.png) |
+### 使用前
+
+![使用前：复制出来是乱码](docs/screenshots/before.png)
+
+### 使用后
+
+![使用后：复制出来是原文](docs/screenshots/after.png)
 
 GlyphCopy 是一个本地 Chrome/Edge MV3 扩展，用来检查和替换超星
 (`chaoxing.com`) 页面里通过自定义字体做了字形混淆的文本。它面向“页面看起来像
