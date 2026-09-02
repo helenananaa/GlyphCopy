@@ -6,7 +6,7 @@
 
 适用于 Chrome 和 Edge，识别与替换均在浏览器本地完成。
 
-[下载项目 ZIP](https://github.com/helenananaa/GlyphCopy/archive/refs/heads/main.zip) · [完整安装教程](docs/INSTALL.zh-CN.md) · [问题反馈](https://github.com/helenananaa/GlyphCopy/issues)
+[下载最新版](https://github.com/helenananaa/GlyphCopy/releases/latest) · [完整安装教程](docs/INSTALL.zh-CN.md) · [问题反馈](https://github.com/helenananaa/GlyphCopy/issues)
 
 ## 效果对比
 
@@ -20,7 +20,7 @@
 
 ## 安装与使用
 
-1. [下载项目 ZIP](https://github.com/helenananaa/GlyphCopy/archive/refs/heads/main.zip) 并解压。
+1. [下载最新版](https://github.com/helenananaa/GlyphCopy/releases/latest)，在 Assets 中获取 `GlyphCopy-v0.1.0.zip` 并解压。
 2. 打开 `chrome://extensions` 或 `edge://extensions`，开启“开发者模式”。
 3. 点击“加载已解压的扩展程序”，选择解压目录中的 `extension` 文件夹。
 4. 打开需要处理的学习通页面，点击浏览器工具栏里的 GlyphCopy 图标。
@@ -57,4 +57,3 @@
 - [实现原理与开发说明](docs/DEVELOPMENT.md)
 - [MIT License](LICENSE)
 - [提交问题或建议](https://github.com/helenananaa/GlyphCopy/issues)
-
