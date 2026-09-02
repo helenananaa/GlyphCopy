@@ -12,11 +12,9 @@ GlyphCopy 用于解析超星学习通测试章节中的字体混淆，让页面�
 
 如果你是从 GitHub 下载：
 
-1. 打开仓库首页。
-2. 点击 `Code`。
-3. 选择 `Download ZIP`。
-4. 解压 ZIP。
-5. 找到解压后的 `extension` 文件夹。
+1. 打开 [Releases 页面](https://github.com/helenananaa/GlyphCopy/releases/latest)。
+2. 在最新版本的 Assets 中下载 `GlyphCopy-vX.Y.Z.zip`。
+3. 解压 ZIP；解压后的目录中应直接包含 `manifest.json`、`content`、`popup` 和 `data`。
 
 如果你是在本机开发目录中使用，请选择仓库里的扩展目录：
 
